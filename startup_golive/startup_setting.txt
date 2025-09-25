@@ -1,0 +1,4 @@
+Properties
+-C:\Program Files\Autodesk\AutoCAD 2021\acad.exe
+
+-/b "D:\PROJECT_API_CAD\MECH\HVAC_DUCT\startup.scr"

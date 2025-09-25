@@ -1,0 +1,13 @@
+# Thư mục ẩn của Visual Studio
+.vs/
+
+# Thư mục build
+bin/
+obj/
+
+# File tạm
+*.user
+*.suo
+
+# Thư mục cache của AutoCAD plugin (tuỳ dự án)
+*.log
