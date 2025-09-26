@@ -1,0 +1,80 @@
+HVAC_DUCT TROUBLESHOOTING STEPS
+===============================
+
+STATUS: DLL compiled successfully with 1 warning (architecture mismatch)
+WARNING: Processor architecture mismatch (MSIL vs AMD64) - this might be the issue!
+
+STEP 1: Test Basic DLL Loading
+==============================
+1. Open AutoCAD Architecture
+2. Type: APPLOAD
+3. Browse to: D:\PROJECT_API_CAD\MECH\HVAC_DUCT\HVAC_DUCT\HVAC_DUCT\
+4. Select: HVAC_Minimal.lsp
+5. Click: Load
+6. Check the message in command line
+
+Expected: "SUCCESS: HVAC_DUCT.dll loaded!"
+If FAILED: The DLL has a compatibility issue
+
+STEP 2: If Step 1 FAILS - Fix Architecture Issue
+================================================
+The warning shows: "processor architecture of the project being built 'MSIL' and the processor architecture of the reference 'AMD64'"
+
+SOLUTION A: Change Project Architecture
+1. Open HVAC_DUCT.csproj in Visual Studio
+2. Right-click project → Properties
+3. Build → Platform target: Change from "Any CPU" to "x64"
+4. Rebuild project
+5. Test again
+
+SOLUTION B: Use 32-bit AutoCAD
+1. Check if you're using 64-bit AutoCAD
+2. Try with 32-bit AutoCAD if available
+3. Or rebuild for 32-bit (x86)
+
+STEP 3: If Step 1 SUCCESS - Test Commands
+=========================================
+1. Type: REGISTERERASE
+2. Type: AUTO
+3. Check if commands work
+
+STEP 4: If Commands Work - Test Ticks
+=====================================
+1. Draw a polyline
+2. Type: TANDUCTGOOD
+3. Check if ticks appear
+
+STEP 5: If Still Not Working - Alternative Approach
+==================================================
+1. Try loading DLL directly:
+   - Type: APPLOAD
+   - Browse to: D:\PROJECT_API_CAD\MECH\HVAC_DUCT\HVAC_DUCT\HVAC_DUCT\bin\Debug\
+   - Select: HVAC_DUCT.dll
+   - Click: Load
+
+2. If that works, the issue is with LISP loading
+3. If that fails, the issue is with the DLL itself
+
+FILES TO TEST
+=============
+1. HVAC_Minimal.lsp - Basic DLL load test
+2. HVAC_Test_Basic.lsp - Comprehensive testing
+3. HVAC_DUCT.dll - The actual DLL file
+
+MOST LIKELY ISSUE
+=================
+The processor architecture mismatch warning suggests the DLL was built for 32-bit but AutoCAD is 64-bit (or vice versa).
+
+QUICK FIX
+=========
+1. Open project in Visual Studio
+2. Change Platform Target to x64
+3. Rebuild
+4. Test again
+
+REPORT BACK
+===========
+Please try Step 1 and tell me:
+1. What message you see (SUCCESS or FAILED)
+2. Any error messages
+3. Your AutoCAD version (32-bit or 64-bit)

@@ -1,0 +1,79 @@
+HVAC_DUCT Startup Suite Setup Instructions
+==========================================
+
+METHOD 1: Using AutoCAD's Startup Suite (Recommended)
+====================================================
+
+Step 1: Open AutoCAD Architecture
+- Launch AutoCAD Architecture (start suite)
+
+Step 2: Access Startup Suite
+- Type: APPLOAD
+- Click "Contents..." button
+- Click "Add..." button
+
+Step 3: Add LISP File
+- Browse to: D:\PROJECT_API_CAD\MECH\HVAC_DUCT\HVAC_DUCT\HVAC_DUCT\
+- Select: HVAC_StartupSuite.lsp
+- Click "Open"
+- Click "Close"
+- Click "Close"
+
+Step 4: Restart AutoCAD
+- Close AutoCAD
+- Reopen AutoCAD Architecture
+- HVAC_DUCT will load automatically!
+
+METHOD 2: Manual Load (Alternative)
+===================================
+
+Step 1: Open AutoCAD Architecture
+- Launch AutoCAD Architecture
+
+Step 2: Load LISP
+- Type: APPLOAD
+- Click "Browse..."
+- Select: HVAC_StartupSuite.lsp
+- Click "Load"
+- Click "Close"
+
+Step 3: Initialize
+- Type: HVAC-INIT
+- Done!
+
+VERIFICATION
+============
+
+To verify it's working:
+1. Type: HVAC-INIT
+2. You should see: "HVAC_DUCT fully initialized!"
+3. Open any DWG file
+4. Ticks should load automatically
+
+TROUBLESHOOTING
+==============
+
+If DLL not found:
+- Check path in HVAC_StartupSuite.lsp line 4
+- Update path to your actual .dll location
+
+If not auto-loading:
+- Make sure HVAC_StartupSuite.lsp is in Startup Suite
+- Check APPLOAD dialog for any errors
+
+If commands not working:
+- Type: HVAC-INIT to reinitialize
+- Check if .dll is loaded: (member "HVAC_DUCT" (arx))
+
+FILES NEEDED
+============
+- HVAC_StartupSuite.lsp (this file)
+- HVAC_DUCT.dll (compiled from Supply_duct.cs)
+- HVAC_DUCT_Ticks_[FileName].txt (auto-created)
+
+COMMANDS AVAILABLE
+==================
+- HVAC-INIT: Full initialization
+- AUTO: Load ticks manually
+- CLEANUPTICKS: Clean up deleted objects
+- REGISTERERASE: Enable auto-cleanup
