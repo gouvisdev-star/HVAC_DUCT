@@ -1,0 +1,43 @@
+HVAC_DUCT - Simple Setup (TAN25_ Commands) - Database Storage
+=============================================================
+
+QUICK SETUP (2 steps):
+1. Open AutoCAD Architecture
+2. Type: APPLOAD
+3. Browse to: D:\PROJECT_API_CAD\MECH\HVAC_DUCT\HVAC_DUCT\HVAC_DUCT\
+4. Select: HVAC.lsp
+5. Click: Load
+6. Done!
+
+AUTOMATIC SETUP (Startup Suite):
+1. Type: APPLOAD
+2. Click: Contents...
+3. Click: Add...
+4. Select: HVAC.lsp
+5. Click: Open
+6. Click: Close
+7. Restart AutoCAD
+
+USAGE:
+- Ticks load automatically when opening files
+- Draw polylines and use TAN25_TANDUCTGOOD command
+- Data stored in AutoCAD database (XData)
+- No external files needed
+
+COMMANDS (All prefixed with TAN25_):
+- TAN25_TANDUCTGOOD: Draw duct with ticks (main command)
+- TAN25_LOADTEMP: Load ticks from database
+
+FILES:
+- HVAC.lsp: Main LISP file
+- HVAC_DUCT.dll: Compiled DLL (x64)
+
+DATABASE STORAGE:
+- Data stored in AutoCAD XData
+- No external files needed
+- Automatic cleanup when objects deleted
+- Data travels with DWG file
+
+QUICK COMMANDS:
+- TAN25_TANDUCTGOOD: Main drawing command (draw duct with ticks)
+- TAN25_LOADTEMP: Load ticks from database

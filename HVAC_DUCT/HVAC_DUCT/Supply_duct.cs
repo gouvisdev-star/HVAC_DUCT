@@ -13,131 +13,119 @@ using System.Threading.Tasks;
 
 namespace HVAC_DUCT
 {
-    public class Supply_duct
-    {
-        // Static flag to track if event handler is registered
-        private static bool _isEventHandlerRegistered = false;
-        private static bool _isObjectErasedHandlerRegistered = false;
-        /// <summary>
-        /// DrawableOverrule để vẽ thêm các tick vuông góc với Polyline (không có fillet arc)
-        /// </summary>
-        public class FilletOverrule : DrawableOverrule
+    public class Supply_duct : IExtensionApplication
+{
+        public void Initialize()
         {
-            private double _blueWidth = 8.0; // Độ dài đoạn xanh
-            private static System.Collections.Generic.HashSet<ObjectId> _allowedPolylines = new System.Collections.Generic.HashSet<ObjectId>();
-            private static System.Collections.Generic.Dictionary<ObjectId, double> _polylineWidths = new System.Collections.Generic.Dictionary<ObjectId, double>();
-
-            /// <summary>
-            /// Constructor khởi tạo bộ lọc tùy chỉnh
-            /// </summary>
-            public FilletOverrule()
+            // Khởi tạo overrule
+            FilletOverruleCmd.InitializeOverrule();
+            
+            // Auto load tick khi load DLL
+            try
             {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                if (doc != null)
+                {
+                    Editor ed = doc.Editor;
+                    ed.WriteMessage("\nAuto loading HVAC_DUCT ticks...");
+                    
+                    // Gọi trực tiếp method thay vì command
+                    FilletOverruleCmd.LoadTempTicks();
+                    
+                    ed.WriteMessage("\nAuto load completed!");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                if (doc != null)
+                {
+                    Editor ed = doc.Editor;
+                    ed.WriteMessage($"\nAuto load error: {ex.Message}");
+                }
+                System.Diagnostics.Debug.WriteLine($"Auto load error: {ex.Message}");
+            }
+        }
+
+        public void Terminate()
+        {
+            // Cleanup overrule
+            FilletOverruleCmd.CleanupOverrule();
+        }
+    /// <summary>
+        /// DrawableOverrule để vẽ thêm các tick vuông góc với Polyline (không có fillet arc)
+    /// </summary>
+    public class FilletOverrule : DrawableOverrule
+    {
+        private static double _blueWidth = 8.0; // Độ dài đoạn xanh
+        private static System.Collections.Generic.HashSet<ObjectId> _allowedPolylines = new System.Collections.Generic.HashSet<ObjectId>();
+            private static Dictionary<ObjectId, double> _polylineWidths = new Dictionary<ObjectId, double>();
+
+        /// <summary>
+        /// Constructor khởi tạo bộ lọc tùy chỉnh
+        /// </summary>
+        public FilletOverrule()
+        {
                 SetCustomFilter(); // Gọi bộ lọc riêng
-            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Cập nhật độ dài đoạn xanh
-            /// </summary>
+        /// </summary>
             /// <param name="newWidth">Độ dài mới cho đoạn xanh</param>
-            public void UpdateBlueWidth(double newWidth)
-            {
+            public static void UpdateBlueWidth(double newWidth)
+        {
                 _blueWidth = newWidth;
-            }
+        }
 
             /// <summary>
             /// Thêm polyline vào danh sách được phép hiển thị tick
             /// </summary>
             /// <param name="polylineId">ObjectId của polyline</param>
             public static void AddAllowedPolyline(ObjectId polylineId)
-            {
-                _allowedPolylines.Add(polylineId);
-            }
+        {
+            _allowedPolylines.Add(polylineId);
+        }
 
-            /// <summary>
-            /// Thêm polyline với width cụ thể
-            /// </summary>
+        /// <summary>
+            /// Thêm polyline với width riêng vào danh sách được phép hiển thị tick
+        /// </summary>
             /// <param name="polylineId">ObjectId của polyline</param>
-            /// <param name="width">Width của polyline</param>
+            /// <param name="width">Width riêng cho polyline này</param>
             public static void AddAllowedPolylineWithWidth(ObjectId polylineId, double width)
             {
                 _allowedPolylines.Add(polylineId);
                 _polylineWidths[polylineId] = width;
-            }
+        }
 
-            /// <summary>
-            /// Lấy width của polyline cụ thể
-            /// </summary>
+        /// <summary>
+            /// Lấy width riêng của polyline
+        /// </summary>
             /// <param name="polylineId">ObjectId của polyline</param>
             /// <returns>Width của polyline hoặc width mặc định</returns>
             public static double GetPolylineWidth(ObjectId polylineId)
-            {
-                if (_polylineWidths.ContainsKey(polylineId))
-                {
-                    return _polylineWidths[polylineId];
-                }
-                return 8.0; // Mặc định
-            }
+        {
+                return _polylineWidths.ContainsKey(polylineId) ? _polylineWidths[polylineId] : _blueWidth;
+        }
 
-            /// <summary>
-            /// Xóa tất cả polyline khỏi danh sách hiển thị tick
-            /// </summary>
-            public static void ClearAllowedPolylines()
-            {
-                _allowedPolylines.Clear();
-            }
+        /// <summary>
+            /// Xóa tất cả polyline khỏi danh sách
+        /// </summary>
+        public static void ClearAllowedPolylines()
+        {
+            _allowedPolylines.Clear();
+        }
 
 
-            /// <summary>
-            /// Vẽ polyline fit tạm màu vàng
-            /// </summary>
-            /// <param name="pl">Polyline gốc</param>
-            /// <param name="wd">WorldDraw context</param>
-            private void DrawTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, WorldDraw wd)
-            {
-                try
-                {
-                    if (pl.NumberOfVertices < 2) return;
-
-                    // Vẽ polyline fit tạm màu vàng
-                    wd.SubEntityTraits.Color = 2; // Vàng
-                    
-                    // Tạo danh sách điểm cho polyline fit
-                    List<Point3d> fitPoints = new List<Point3d>();
-                    
-                    // Thêm tất cả các đỉnh của polyline
-                    for (int i = 0; i < pl.NumberOfVertices; i++)
-                    {
-                        fitPoints.Add(pl.GetPoint3dAt(i));
-                    }
-                    
-                    // Nếu polyline đóng, thêm điểm đầu để tạo polyline fit đóng
-                    if (pl.Closed && pl.NumberOfVertices > 2)
-                    {
-                        fitPoints.Add(pl.GetPoint3dAt(0));
-                    }
-                    
-                    // Vẽ polyline fit qua các điểm
-                    if (fitPoints.Count >= 2)
-                    {
-                        // Vẽ polyline fit bằng cách vẽ nhiều line ngắn để tạo đường cong mượt
-                        DrawPolylineFit(fitPoints, wd);
-                    }
-                }
-                catch
-                {
-                    // Bỏ qua lỗi nếu có
-                }
-            }
-
-            /// <summary>
+        /// <summary>
             /// Vẽ Polyline Fit mượt mà qua các điểm
-            /// </summary>
+        /// </summary>
             /// <param name="points">Danh sách điểm</param>
             /// <param name="wd">WorldDraw context</param>
             private void DrawPolylineFit(List<Point3d> points, WorldDraw wd)
+        {
+            try
             {
-                try
-                {
                     if (points.Count < 2) return;
 
                     // Tạo Polyline Fit với các điểm trung gian để tạo đường cong mượt
@@ -181,18 +169,18 @@ namespace HVAC_DUCT
                 {
                     // Bỏ qua lỗi nếu có
                 }
-            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Lấy điểm trên polyline tạm tại khoảng cách cho trước
-            /// </summary>
+        /// </summary>
             /// <param name="pl">Polyline gốc</param>
             /// <param name="distance">Khoảng cách</param>
             /// <returns>Điểm trên polyline tạm</returns>
             private Point3d GetPointOnTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double distance)
+        {
+            try
             {
-                try
-                {
                     // Tạo danh sách điểm cho polyline fit
                     List<Point3d> fitPoints = new List<Point3d>();
                     
@@ -238,16 +226,16 @@ namespace HVAC_DUCT
                     }
                     
                     return fitPoints[fitPoints.Count - 1];
-                }
-                catch
-                {
-                    return pl.GetPointAtDist(distance);
-                }
             }
+            catch
+            {
+                    return pl.GetPointAtDist(distance);
+            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Lấy tiếp tuyến trên polyline tạm tại khoảng cách cho trước
-            /// </summary>
+        /// </summary>
             /// <param name="pl">Polyline gốc</param>
             /// <param name="distance">Khoảng cách</param>
             /// <returns>Vector tiếp tuyến</returns>
@@ -261,9 +249,9 @@ namespace HVAC_DUCT
                     Point3d p2 = GetPointOnTempPolyline(pl, distance + delta);
                     
                     return p2 - p1;
-                }
-                catch
-                {
+            }
+            catch
+            {
                     // Fallback về polyline gốc
                     double param = pl.GetParameterAtPoint(pl.GetPointAtDist(distance));
                             double deltaParam = 0.01;
@@ -271,23 +259,23 @@ namespace HVAC_DUCT
                             double p1 = Math.Min(pl.EndParam, param + deltaParam);
                     return pl.GetPointAtParameter(p1) - pl.GetPointAtParameter(p0);
                 }
-            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Tính chiều dài polyline tạm
-            /// </summary>
+        /// </summary>
             /// <param name="pl">Polyline gốc</param>
             /// <returns>Chiều dài polyline tạm</returns>
             private double GetTempPolylineLength(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
-            {
+        {
                 try
-                {
+            {
                     // Tạo danh sách điểm cho polyline fit
                     List<Point3d> fitPoints = new List<Point3d>();
                     
                     // Thêm tất cả các đỉnh của polyline
-                    for (int i = 0; i < pl.NumberOfVertices; i++)
-                    {
+                for (int i = 0; i < pl.NumberOfVertices; i++)
+                {
                         fitPoints.Add(pl.GetPoint3dAt(i));
                     }
                     
@@ -318,11 +306,11 @@ namespace HVAC_DUCT
                         return 0.0;
                     }
                 }
-            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Tạo danh sách điểm cho polyline fit tạm
-            /// </summary>
+        /// </summary>
             /// <param name="pl">Polyline gốc</param>
             /// <returns>Danh sách điểm polyline fit tạm</returns>
             private List<Point3d> CreateTempPolylinePoints(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
@@ -369,9 +357,9 @@ namespace HVAC_DUCT
                             if (filletPoints.Count > 0)
                             {
                                 fitPoints.AddRange(filletPoints);
-                            }
-                            else
-                            {
+                }
+                else
+                {
                                 // Fallback: tạo điểm trung gian đơn giản
                                 Point3d midPoint1 = new Point3d(
                                     (prev.X + current.X) / 2,
@@ -407,22 +395,22 @@ namespace HVAC_DUCT
                 }
                 
                 return fitPoints;
-            }
+        }
 
-            /// <summary>
+        /// <summary>
             /// Tạo điểm bo góc tròn (fillet) cho 3 điểm liên tiếp
-            /// </summary>
+        /// </summary>
             /// <param name="prev">Điểm trước</param>
             /// <param name="current">Điểm hiện tại</param>
             /// <param name="next">Điểm tiếp theo</param>
             /// <param name="radius">Bán kính bo góc</param>
             /// <returns>Danh sách điểm bo góc tròn</returns>
             private List<Point3d> CreateFilletPoints(Point3d prev, Point3d current, Point3d next, double radius)
+        {
+            List<Point3d> filletPoints = new List<Point3d>();
+            
+            try
             {
-                List<Point3d> filletPoints = new List<Point3d>();
-                
-                try
-                {
                     // Vector từ current đến prev và next
                     Vector3d v1 = (prev - current).GetNormal();
                     Vector3d v2 = (next - current).GetNormal();
@@ -457,7 +445,7 @@ namespace HVAC_DUCT
                     Vector3d crossProduct = v1.CrossProduct(v2);
                     
                     // Tâm của cung tròn
-                    Vector3d bisector = (v1 + v2).GetNormal();
+                Vector3d bisector = (v1 + v2).GetNormal();
                     double centerDistance = radius / Math.Sin(angle / 2.0);
                     
                     // Đảo ngược hướng bo là chuẩn - không đảo ngược bisector
@@ -484,9 +472,9 @@ namespace HVAC_DUCT
                     
                     // Tạo các điểm trên cung tròn thực sự
                     int segments = 16; // Tăng số đoạn để mượt hơn
-                    for (int i = 0; i <= segments; i++)
-                    {
-                        double t = (double)i / segments;
+                for (int i = 0; i <= segments; i++)
+                {
+                    double t = (double)i / segments;
                         double currentAngle = t * filletAngle;
                         
                         // Nếu cung ngược chiều, đảo ngược góc
@@ -509,19 +497,19 @@ namespace HVAC_DUCT
                         // Điểm trên cung tròn
                         Point3d point = center + rotatedVector * radius;
                         filletPoints.Add(point);
-                    }
                 }
-                catch
-                {
-                    // Nếu có lỗi, trả về danh sách rỗng
-                }
-                
-                return filletPoints;
             }
+            catch
+            {
+                    // Nếu có lỗi, trả về danh sách rỗng
+            }
+            
+            return filletPoints;
+        }
 
-            /// <summary>
+        /// <summary>
             /// Áp vát mềm cho danh sách điểm (giống TAN_SOFT_CHAMFER)
-            /// </summary>
+        /// </summary>
             /// <param name="originalPoints">Danh sách điểm gốc</param>
             /// <param name="softness">Bán kính vát mềm</param>
             /// <returns>Danh sách điểm đã vát mềm</returns>
@@ -573,9 +561,9 @@ namespace HVAC_DUCT
                 return softPoints;
             }
 
-            /// <summary>
+        /// <summary>
             /// Áp vát mềm tại một góc (giống ApplySoftChamfer)
-            /// </summary>
+        /// </summary>
             /// <param name="prev">Điểm trước</param>
             /// <param name="current">Điểm hiện tại</param>
             /// <param name="next">Điểm sau</param>
@@ -655,9 +643,9 @@ namespace HVAC_DUCT
             }
 
 
-            /// <summary>
+        /// <summary>
             /// Vẽ polyline tạm từ danh sách điểm
-            /// </summary>
+        /// </summary>
             /// <param name="points">Danh sách điểm</param>
             /// <param name="wd">WorldDraw context</param>
             private void DrawTempPolylineFromPoints(List<Point3d> points, WorldDraw wd)
@@ -687,9 +675,9 @@ namespace HVAC_DUCT
             /// <param name="points">Danh sách điểm</param>
             /// <returns>Chiều dài polyline</returns>
             private double CalculatePolylineLength(List<Point3d> points)
-            {
-                try
-                {
+                    {
+                        try
+                        {
                     double totalLength = 0.0;
                     for (int i = 0; i < points.Count - 1; i++)
                     {
@@ -814,7 +802,7 @@ namespace HVAC_DUCT
 
                     // Tham số tick: đỏ 2" + xanh (có thể thay đổi) + đỏ 2"
                     double redLength = 2.0;
-                    double blueLength = GetPolylineWidth(pl.ObjectId); // Lấy width riêng cho polyline này
+                    double blueLength = GetPolylineWidth(pl.ObjectId);
                     double totalTickLength = redLength + blueLength + redLength;
                     double halfTickLength = totalTickLength / 2.0;
 
@@ -853,6 +841,9 @@ namespace HVAC_DUCT
                             // Vẽ đoạn xanh giữa
                             wd.SubEntityTraits.Color = 4; // Xanh sáng
                             wd.Geometry.WorldLine(blueStart, blueEnd);
+                            
+                            
+                            
 
                             // Vẽ đoạn đỏ cuối
                             wd.SubEntityTraits.Color = 1; // Đỏ
@@ -869,55 +860,8 @@ namespace HVAC_DUCT
             }
 
 
-            /// <summary>
-            /// Vẽ spline ảo theo polyline (làm mượt các góc) - Giữ lại cho tương thích
-            /// </summary>
-            /// <param name="pl">Polyline cần vẽ spline</param>
-            /// <param name="wd">WorldDraw context</param>
-            private void DrawVirtualSpline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, WorldDraw wd)
-            {
-                if (pl.NumberOfVertices < 3) return;
 
-                // Tạo danh sách điểm cho spline
-                Point3dCollection splinePoints = new Point3dCollection();
 
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                    Point3d pt = pl.GetPoint3dAt(i);
-                    splinePoints.Add(pt);
-                }
-
-                // Vẽ spline ảo bằng cách vẽ nhiều đoạn thẳng mượt
-                int segments = 20; // Số đoạn để tạo spline mượt
-                for (int i = 0; i < splinePoints.Count - 1; i++)
-                {
-                    Point3d p1 = splinePoints[i];
-                    Point3d p2 = splinePoints[i + 1];
-
-                    // Vẽ đoạn thẳng với các điểm trung gian để tạo hiệu ứng mượt
-                    for (int j = 0; j < segments; j++)
-                    {
-                        double t1 = (double)j / segments;
-                        double t2 = (double)(j + 1) / segments;
-
-                        Point3d pt1 = p1 + (p2 - p1) * t1;
-                        Point3d pt2 = p1 + (p2 - p1) * t2;
-
-                        // Thêm độ cong nhẹ để tạo hiệu ứng spline
-                        if (i > 0 && i < splinePoints.Count - 2)
-                        {
-                            Vector3d normal = new Vector3d(-(p2 - p1).Y, (p2 - p1).X, 0.0).GetNormal();
-                            double curve1 = Math.Sin(t1 * Math.PI) * 0.5;
-                            double curve2 = Math.Sin(t2 * Math.PI) * 0.5;
-
-                            pt1 = pt1 + normal * curve1;
-                            pt2 = pt2 + normal * curve2;
-                        }
-
-                        wd.Geometry.WorldLine(pt1, pt2);
-                    }
-                }
-            }
 
             /// <summary>
             /// Thiết lập bộ lọc tùy chỉnh (có thể thêm logic lọc nâng cao)
@@ -931,22 +875,125 @@ namespace HVAC_DUCT
         /// <summary>
         /// Class chứa các lệnh để bật/tắt FilletOverrule
         /// </summary>
-        public class FilletOverruleCmd
+    public class FilletOverruleCmd
+    {
+        private static FilletOverrule _overrule;
+        private static double _blueWidth = 8.0;
+
+        /// <summary>
+        /// Khởi tạo overrule
+        /// </summary>
+        public static void InitializeOverrule()
         {
-            public static FilletOverrule _overrule;
-            private static double _blueWidth = 8.0; // Độ dài đoạn xanh mặc định
+            try
+            {
+                if (_overrule == null)
+                {
+                    _overrule = new FilletOverrule();
+                    Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), _overrule, true);
+                    Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline2d)), _overrule, true);
+                    _overrule.SetCustomFilter();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi khởi tạo overrule: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Cleanup overrule
+        /// </summary>
+        public static void CleanupOverrule()
+        {
+            try
+            {
+                if (_overrule != null)
+                {
+                    Overrule.RemoveOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), _overrule);
+                    Overrule.RemoveOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline2d)), _overrule);
+                    _overrule = null;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi cleanup overrule: {ex.Message}");
+            }
+        } // Độ dài đoạn xanh mặc định
+
+            /// <summary>
+            /// Lưu thông tin tick vào XData của polyline
+            /// </summary>
+            /// <param name="pl">Polyline cần lưu</param>
+            /// <param name="blueWidth">Width của tick</param>
+        private static void SaveTickInfoToDatabase(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double blueWidth)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                
+                // Đăng ký ứng dụng trước khi lưu XData
+                string appName = "HVAC_DUCT";
+                using (Transaction regTr = db.TransactionManager.StartTransaction())
+                {
+                    RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
+                    if (!regAppTable.Has(appName))
+                    {
+                        regAppTable.UpgradeOpen();
+                        RegAppTableRecord regAppRecord = new RegAppTableRecord();
+                        regAppRecord.Name = appName;
+                        regAppTable.Add(regAppRecord);
+                        regTr.AddNewlyCreatedDBObject(regAppRecord, true);
+                    }
+                    regTr.Commit();
+                }
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    // Mở polyline để ghi XData
+                    Autodesk.AutoCAD.DatabaseServices.Polyline plForWrite = tr.GetObject(pl.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    
+                        // Tạo ResultBuffer với tên ứng dụng và width
+                    ResultBuffer rb = new ResultBuffer();
+                        rb.Add(new TypedValue(1001, appName)); // Tên ứng dụng
+                        rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
+                    
+                    // Thêm XData vào polyline
+                    plForWrite.XData = rb;
+                    
+                    tr.Commit();
+                    
+                    // Debug message
+                    Document doc2 = Application.DocumentManager.MdiActiveDocument;
+                    Editor ed2 = doc2.Editor;
+                    ed2.WriteMessage($"\nĐã lưu width {blueWidth:F1} vào XData của Handle: {pl.ObjectId.Handle.Value}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // Log lỗi để debug
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi lưu XData: {ex.Message}");
+                }
+            }
 
 
             /// <summary>
             /// Lệnh vẽ duct với tick: nhập W -> chọn điểm đầu tiên -> vẽ polyline với tick overrule
             /// </summary>
-            [CommandMethod("TANDUCTGOOD")]
+            [CommandMethod("TAN25_TANDUCTGOOD")]
             public static void TanDuctGood()
             {
                 Document doc = Application.DocumentManager.MdiActiveDocument;
                 Editor ed = doc.Editor;
                 Database db = doc.Database;
-
+                
                 try
                 {
                     // Bước 1: Nhập W (width đoạn xanh)
@@ -975,20 +1022,20 @@ namespace HVAC_DUCT
                     if (_overrule == null)
                     {
                         _overrule = new FilletOverrule();
-                        _overrule.UpdateBlueWidth(_blueWidth);
+                        FilletOverrule.UpdateBlueWidth(_blueWidth);
                         Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), _overrule, true);
                         Overrule.Overruling = true;
                         ed.WriteMessage($"\nTick overrule đã bật W={_blueWidth:F1}\"");
                     }
                     else
                     {
-                        _overrule.UpdateBlueWidth(_blueWidth);
+                        FilletOverrule.UpdateBlueWidth(_blueWidth);
                         ed.WriteMessage($"\nĐã cập nhật W = {_blueWidth:F1}\"");
                     }
 
                     // Bước 4: Vẽ polyline với DrawJig
-                    using (Transaction tr = db.TransactionManager.StartTransaction())
-                    {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
                         BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
                         BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
 
@@ -1042,11 +1089,18 @@ namespace HVAC_DUCT
                             // Thêm polyline vào danh sách được phép hiển thị tick với width riêng
                             FilletOverrule.AddAllowedPolylineWithWidth(pl.ObjectId, _blueWidth);
                             
-                            // Lưu thông tin tick vào file tạm (không lưu vào database)
-                            SaveTickInfoToTempFile(pl, _blueWidth);
-
-                            tr.Commit();
+                            // Lưu thông tin tick vào XData
+                            SaveTickInfoToDatabase(pl, _blueWidth);
+                    
+                    tr.Commit();
+                            
+                            // Tạo MText sau khi kết thúc lệnh vẽ polyline
+                            CreateMTextForPolyline(pl);
+                            
                             ed.WriteMessage($"\nĐã tạo duct với {pl.NumberOfVertices} điểm! Tick sẽ hiển thị tự động.");
+                            
+                            // Refresh màn hình để hiển thị tick và MText
+                            ed.Regen();
                         }
                         else
                         {
@@ -1054,346 +1108,413 @@ namespace HVAC_DUCT
                             tr.Abort();
                             ed.WriteMessage("\nCần ít nhất 2 điểm để tạo duct!");
                         }
-                    }
-                }
-                catch (System.Exception ex)
-                {
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
                 }
             }
-
-            /// <summary>
-        /// Lệnh hiển thị tick cho polyline đã vẽ
-            /// </summary>
-        [CommandMethod("SHOWTICKS")]
-        public static void ShowTicks()
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                try
-                {
-                // Chọn polyline cần hiển thị tick
-                PromptEntityOptions plOpts = new PromptEntityOptions("\nChọn polyline cần hiển thị tick: ");
-                plOpts.SetRejectMessage("\nVui lòng chọn polyline!");
-                plOpts.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
-
-                PromptEntityResult plResult = ed.GetEntity(plOpts);
-                if (plResult.Status != PromptStatus.OK) return;
-
-                ObjectId plId = plResult.ObjectId;
-
-                // Thêm polyline vào danh sách được phép hiển thị tick với width mặc định
-                FilletOverrule.AddAllowedPolylineWithWidth(plId, 8.0);
-                
-                // Lưu thông tin tick vào file tạm
-                    using (Transaction tr = db.TransactionManager.StartTransaction())
-                    {
-                    Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(plId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                    SaveTickInfoToTempFile(pl, 8.0); // Mặc định 8 inch
-                    tr.Commit();
-                }
-                
-                ed.WriteMessage($"\nĐã hiển thị tick cho polyline được chọn!");
-                    }
             catch (System.Exception ex)
-                {
+            {
                     ed.WriteMessage($"\nLỗi: {ex.Message}");
                 }
             }
 
-            /// <summary>
-        /// Đánh dấu polyline đã vẽ tick bằng Xrecord với thông tin độ dài tick
-            /// </summary>
-        private static void MarkPolylineWithTicks(ObjectId plId, Transaction tr, double blueWidth = 8.0)
-            {
-                try
-                {
-                // Tạo Xrecord để đánh dấu polyline đã vẽ tick với thông tin độ dài
-                Xrecord xrec = new Xrecord();
-                xrec.Data = new ResultBuffer(
-                    new TypedValue((int)DxfCode.Text, "TICKED_POLYLINE"),
-                    new TypedValue((int)DxfCode.Real, blueWidth)
-                );
-                
-                // Thêm Xrecord vào polyline
-                Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(plId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                pl.XData = xrec.Data;
-                }
-                catch
-                {
-                    // Bỏ qua lỗi nếu có
-                }
-            }
 
-            /// <summary>
-        /// Tải lại tất cả polyline đã vẽ tick khi mở bản vẽ
-            /// </summary>
-        [CommandMethod("LOADTICKS")]
-        public static void LoadTicks()
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                try
-                {
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
-
-                    int count = 0;
-                    double lastBlueWidth = 8.0; // Lưu độ dài tick cuối cùng
-                    
-                    foreach (ObjectId objId in btr)
-                    {
-                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
-                        {
-                            Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                            
-                            // Kiểm tra Xrecord để xem polyline đã vẽ tick chưa
-                            if (pl.XData != null)
-                            {
-                                bool isTicked = false;
-                                double blueWidth = 8.0; // Mặc định
-                                
-                                for (int i = 0; i < pl.XData.AsArray().Length; i++)
-                                {
-                                    TypedValue tv = pl.XData.AsArray()[i];
-                                    
-                                    if (tv.TypeCode == (int)DxfCode.Text && tv.Value.ToString() == "TICKED_POLYLINE")
-                                    {
-                                        isTicked = true;
-                                        
-                                        // Đọc độ dài tick từ Xrecord
-                                        if (i + 1 < pl.XData.AsArray().Length)
-                                        {
-                                            TypedValue nextTv = pl.XData.AsArray()[i + 1];
-                                            if (nextTv.TypeCode == (int)DxfCode.Real)
-                                            {
-                                                blueWidth = (double)nextTv.Value;
-                                                lastBlueWidth = blueWidth; // Lưu độ dài tick
-                                            }
-                                        }
-                                        break;
-                                    }
-                                }
-                                
-                                if (isTicked)
-                                {
-                                    // Cập nhật độ dài tick cho overrule
-                                    if (FilletOverruleCmd._overrule != null)
-                                    {
-                                        FilletOverruleCmd._overrule.UpdateBlueWidth(blueWidth);
-                                    }
-                                    FilletOverrule.AddAllowedPolyline(objId);
-                                    count++;
-                                }
-                            }
-                        }
-                    }
-
-                    tr.Commit();
-                    ed.WriteMessage($"\nĐã tải lại tick cho {count} polyline!");
-                }
-            }
-            catch (System.Exception ex)
-                {
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
-            }
-
-            /// <summary>
-        /// Tắt hiển thị tick cho tất cả polyline (không xóa Xrecord)
-            /// </summary>
-        [CommandMethod("HIDETICKS")]
-        public static void HideTicks()
-            {
-                try
-                {
-                // Xóa tất cả polyline khỏi danh sách hiển thị tick
-                FilletOverrule.ClearAllowedPolylines();
-
-                    Document doc = Application.DocumentManager.MdiActiveDocument;
-                    Editor ed = doc.Editor;
-                ed.WriteMessage("\nĐã ẩn tất cả tick! Sử dụng LOADTICKS để hiển thị lại.");
-            }
-            catch (System.Exception ex)
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
-            }
-
-            /// <summary>
-        /// Xóa hoàn toàn đánh dấu tick (xóa Xrecord)
-            /// </summary>
-        [CommandMethod("REMOVETICKS")]
-        public static void RemoveTicks()
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                try
-                {
-                using (Transaction tr = db.TransactionManager.StartTransaction())
-                {
-                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
-
-                    int count = 0;
-                    
-                    foreach (ObjectId objId in btr)
-                    {
-                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
-                        {
-                            Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(objId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-                            
-                            // Kiểm tra và xóa Xrecord
-                            if (pl.XData != null)
-                            {
-                                bool hasTicked = false;
-                                for (int i = 0; i < pl.XData.AsArray().Length; i++)
-                                {
-                                    TypedValue tv = pl.XData.AsArray()[i];
-                                    if (tv.TypeCode == (int)DxfCode.Text && tv.Value.ToString() == "TICKED_POLYLINE")
-                                    {
-                                        hasTicked = true;
-                                        break;
-                                    }
-                                }
-                                
-                                if (hasTicked)
-                                {
-                                    // Xóa Xrecord
-                                    pl.XData = null;
-                                    count++;
-                                }
-                            }
-                        }
-                    }
-
-                    // Xóa khỏi danh sách hiển thị
-                    FilletOverrule.ClearAllowedPolylines();
-
-                            tr.Commit();
-                    ed.WriteMessage($"\nĐã xóa đánh dấu tick cho {count} polyline!");
-                        }
-                    }
-            catch (System.Exception ex)
-                {
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
-            }
-
-            /// <summary>
-        /// Lưu thông tin tick vào file tạm trong thư mục dự án (không lưu vào database)
-            /// </summary>
-        private static void SaveTickInfoToTempFile(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double blueWidth)
-            {
+        /// <summary>
+        /// Cập nhật width trong XData của polyline
+        /// </summary>
+        /// <param name="pl">Polyline cần cập nhật</param>
+        /// <param name="newWidth">Width mới</param>
+        private static void UpdateWidthInXData(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double newWidth)
+        {
             try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+
+                // Đăng ký ứng dụng nếu chưa có
+                string appName = "HVAC_DUCT";
+                using (Transaction regTr = db.TransactionManager.StartTransaction())
                 {
-                // Lấy đường dẫn file hiện tại
-                    Document doc = Application.DocumentManager.MdiActiveDocument;
-                string filePath = doc.Name;
-                
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    // Nếu chưa có tên file, lưu vào thư mục Temp
-                    string fileName = "Drawing1";
-                    string tempFilePath = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(), 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                    
-                    using (System.IO.StreamWriter writer = new System.IO.StreamWriter(tempFilePath, true))
+                    RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
+                    if (!regAppTable.Has(appName))
                     {
-                        writer.WriteLine($"{pl.ObjectId.Handle.Value},{blueWidth:F1},{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                        regAppTable.UpgradeOpen();
+                        RegAppTableRecord regAppRecord = new RegAppTableRecord();
+                        regAppRecord.Name = appName;
+                        regAppTable.Add(regAppRecord);
+                        regTr.AddNewlyCreatedDBObject(regAppRecord, true);
+                    }
+                    regTr.Commit();
+                }
+
+                // Tạo ResultBuffer với tên ứng dụng và width mới
+                ResultBuffer rb = new ResultBuffer();
+                rb.Add(new TypedValue(1001, "HVAC_DUCT")); // Tên ứng dụng
+                rb.Add(new TypedValue(1040, newWidth)); // Width as Double
+
+                // Cập nhật XData
+                pl.XData = rb;
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi cập nhật XData: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Xóa MText cũ của polyline
+        /// </summary>
+        /// <param name="pl">Polyline cần xóa MText</param>
+        private static void DeleteMTextForPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    // Tìm và xóa MText gần polyline
+                    Point3d endPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 1);
+                    Vector3d tangent = GetTangentAtEnd(pl);
+                    Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
+                    Point3d expectedTextPosition = endPoint + normal * 5.0;
+
+                    List<ObjectId> mtextToDelete = new List<ObjectId>();
+
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass.Name == "AcDbMText")
+                        {
+                            MText mtext = tr.GetObject(objId, OpenMode.ForRead) as MText;
+                            if (mtext != null)
+                            {
+                                // Kiểm tra khoảng cách (trong vòng 2 inch)
+                                double distance = mtext.Location.DistanceTo(expectedTextPosition);
+                                if (distance < 2.0)
+                                {
+                                    mtextToDelete.Add(objId);
+                                }
+                            }
+                        }
+                    }
+
+                    // Xóa MText
+                    foreach (ObjectId objId in mtextToDelete)
+                    {
+                        Entity entity = tr.GetObject(objId, OpenMode.ForWrite) as Entity;
+                        entity.Erase();
+                    }
+
+                    tr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi xóa MText: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Load width từ XData của polyline
+        /// </summary>
+        /// <param name="pl">Polyline cần load width</param>
+        /// <returns>Width từ XData hoặc 0 nếu không tìm thấy</returns>
+        private static double LoadWidthFromXData(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                if (pl.XData == null) return 0;
+
+                ResultBuffer rb = pl.XData;
+                bool isHVACDuct = false;
+                double width = 0;
+
+                foreach (TypedValue tv in rb)
+                {
+                    if (tv.TypeCode == 1001) // Tên ứng dụng
+                    {
+                        if (tv.Value.ToString() == "HVAC_DUCT")
+                        {
+                            isHVACDuct = true;
+                        }
+                    }
+                    else if (tv.TypeCode == 1040) // Double - Width
+                    {
+                        width = (double)tv.Value;
                     }
                 }
-                else
-                {
-                    // Lấy thư mục chứa file dự án
-                    string projectDir = System.IO.Path.GetDirectoryName(filePath);
-                    string fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-                    
-                    // Tạo file tạm trong thư mục dự án
-                    string tempFilePath = System.IO.Path.Combine(
-                        projectDir, 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                    
-                    // Tạo hoặc mở file tạm
-                    using (System.IO.StreamWriter writer = new System.IO.StreamWriter(tempFilePath, true))
-                    {
-                        // Lưu thông tin: ObjectId, BlueWidth, Timestamp
-                        writer.WriteLine($"{pl.ObjectId.Handle.Value},{blueWidth:F1},{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                    }
-                }
+
+                // Chỉ trả về width nếu là ứng dụng HVAC_DUCT
+                return isHVACDuct ? width : 0;
             }
             catch
             {
-                // Bỏ qua lỗi nếu có
-                }
+                return 0;
             }
+        }
 
-            /// <summary>
-        /// Tải thông tin tick từ file tạm (tự động load khi mở file)
-            /// </summary>
-        [CommandMethod("LOADTEMP")]
-        public static void LoadTempTicks()
+        /// <summary>
+        /// Tạo hoặc lấy layer ID
+        /// </summary>
+        /// <param name="layerName">Tên layer</param>
+        /// <param name="colorIndex">Màu layer</param>
+        /// <returns>ObjectId của layer</returns>
+        private static ObjectId CreateOrGetLayer(string layerName, short colorIndex)
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            
+            using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                try
-                {
-                // Đảm bảo overrule được kích hoạt
-                if (FilletOverruleCmd._overrule == null)
-                {
-                    FilletOverruleCmd._overrule = new FilletOverrule();
-                    Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), FilletOverruleCmd._overrule, true);
-                    ed.WriteMessage("\nĐã kích hoạt tick overrule!");
-                }
-
-                // Lấy đường dẫn file hiện tại
-                string filePath = doc.Name;
-                string tempFilePath;
+                LayerTable layerTable = tr.GetObject(db.LayerTableId, OpenMode.ForRead) as LayerTable;
                 
-                if (string.IsNullOrEmpty(filePath))
+                if (layerTable.Has(layerName))
                 {
-                    // Nếu chưa có tên file, tìm trong thư mục Temp
-                    string fileName = "Drawing1";
-                    tempFilePath = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(), 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
+                    return layerTable[layerName];
                 }
                 else
                 {
-                    // Lấy thư mục chứa file dự án
-                    string projectDir = System.IO.Path.GetDirectoryName(filePath);
-                    string fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
+                    layerTable.UpgradeOpen();
+                    LayerTableRecord layerRecord = new LayerTableRecord();
+                    layerRecord.Name = layerName;
+                    layerRecord.Color = Color.FromColorIndex(ColorMethod.ByAci, colorIndex);
+                    layerTable.Add(layerRecord);
+                    tr.AddNewlyCreatedDBObject(layerRecord, true);
+                    tr.Commit();
+                    return layerRecord.ObjectId;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tạo MText cho polyline sau khi kết thúc lệnh vẽ
+        /// </summary>
+        /// <param name="pl">Polyline đã vẽ</param>
+        private static void CreateMTextForPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                // Load width từ XData của polyline
+                double width = LoadWidthFromXData(pl);
+                if (width <= 0)
+                {
+                    ed.WriteMessage($"\nKhông tìm thấy width trong XData của polyline Handle: {pl.ObjectId.Handle.Value}");
+                    return;
+                }
+
+                // Lấy điểm cuối của polyline
+                Point3d endPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 1);
+                
+                // Tính vector pháp tuyến tại điểm cuối
+                Vector3d tangent = GetTangentAtEnd(pl);
+                Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
+                
+                // Tạo text hiển thị width
+                string widthText = $"{width:F0}\"∅";
+                
+                // Vị trí text bên ngoài polyline
+                Point3d textPosition = endPoint + normal * 5.0; // Cách polyline 5 inch
+                
+                // Tạo layer cho MText nếu chưa có
+                ObjectId layerId = CreateOrGetLayer("M-ANNO-TAG-DUCT", 50); // Màu 50 theo chuẩn
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    // Tạo MText
+                    MText mtext = new MText();
+                    mtext.SetDatabaseDefaults();
+                    mtext.Contents = widthText;
+                    mtext.Location = textPosition;
+                    mtext.Height = 4.5; // Chiều cao text
+                    mtext.TextHeight = 4.5; // Đảm bảo height không bị override
+                    mtext.ColorIndex = 50; // Màu 50 theo chuẩn
+                    mtext.LayerId = layerId;
                     
-                    // Tìm file tạm trong thư mục dự án
-                    tempFilePath = System.IO.Path.Combine(
-                        projectDir, 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
+                    // Đảm bảo height không bị override bởi layer
+                    mtext.Color = Color.FromColorIndex(ColorMethod.ByAci, 50);
+                    
+                    // Thêm MText vào database
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+                    btr.AppendEntity(mtext);
+                    tr.AddNewlyCreatedDBObject(mtext, true);
+                    
+                    tr.Commit();
                 }
                 
-                ed.WriteMessage($"\nĐang tìm file tạm tại: {tempFilePath}");
+                // Refresh màn hình để hiển thị MText
+                ed.Regen();
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi tạo MText: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Lấy vector tiếp tuyến tại điểm cuối của polyline
+        /// </summary>
+        /// <param name="pl">Polyline</param>
+        /// <returns>Vector tiếp tuyến</returns>
+        private static Vector3d GetTangentAtEnd(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                if (pl.NumberOfVertices < 2) return new Vector3d(1, 0, 0);
                 
-                if (!System.IO.File.Exists(tempFilePath))
+                Point3d lastPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 1);
+                Point3d secondLastPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 2);
+                
+                return (lastPoint - secondLastPoint).GetNormal();
+            }
+            catch
+            {
+                return new Vector3d(1, 0, 0);
+            }
+        }
+
+
+        /// <summary>
+        /// Lệnh edit width của polyline và tự động load lại tick + MText
+        /// </summary>
+        [CommandMethod("TAN25_EDITWIDTH")]
+        public static void EditWidthAndReload()
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                ed.WriteMessage("\n=== BẮT ĐẦU LỆNH TAN25_EDITWIDTH ===");
+
+                // Chọn polyline
+                PromptEntityOptions peo = new PromptEntityOptions("\nChọn polyline cần edit width: ");
+                peo.SetRejectMessage("\nVui lòng chọn polyline!");
+                peo.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+                peo.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline2d), true);
+
+                PromptEntityResult per = ed.GetEntity(peo);
+                if (per.Status != PromptStatus.OK) return;
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
-                    ed.WriteMessage("\nKhông tìm thấy file tạm chứa thông tin tick!");
-                    return;
+                    Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(per.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (pl == null)
+                    {
+                        ed.WriteMessage("\nKhông thể load polyline!");
+                        return;
+                    }
+
+                    // Load width hiện tại từ XData
+                    double currentWidth = LoadWidthFromXData(pl);
+                    if (currentWidth <= 0)
+                    {
+                        ed.WriteMessage("\nPolyline này không có width trong XData!");
+                        return;
+                    }
+
+                    ed.WriteMessage($"\nWidth hiện tại: {currentWidth:F1}");
+
+                    // Nhập width mới
+                    PromptDoubleOptions pdo = new PromptDoubleOptions($"\nNhập width mới (hiện tại: {currentWidth:F1}): ");
+                    pdo.AllowNegative = false;
+                    pdo.AllowZero = false;
+                    pdo.DefaultValue = currentWidth;
+
+                    PromptDoubleResult pdr = ed.GetDouble(pdo);
+                    if (pdr.Status != PromptStatus.OK) return;
+
+                    double newWidth = pdr.Value;
+
+                    // Cập nhật XData với width mới
+                    pl.UpgradeOpen();
+                    UpdateWidthInXData(pl, newWidth);
+
+                    // Cập nhật width trong FilletOverrule
+                    FilletOverrule.UpdateBlueWidth(newWidth);
+                    FilletOverrule.AddAllowedPolylineWithWidth(pl.ObjectId, newWidth);
+
+                    tr.Commit();
+
+                    ed.WriteMessage($"\nĐã cập nhật width từ {currentWidth:F1} thành {newWidth:F1}");
+
+                    // Xóa MText cũ (nếu có)
+                    DeleteMTextForPolyline(pl);
+
+                    // Tạo MText mới
+                    CreateMTextForPolyline(pl);
+
+                    // Load lại tick
+                    LoadTempTicks();
+
+                    ed.WriteMessage($"\nĐã load lại tick và MText với width mới: {newWidth:F1}");
+                }
+
+                // Refresh màn hình để hiển thị thay đổi
+                ed.Regen();
+                ed.WriteMessage("\n=== KẾT THÚC LỆNH TAN25_EDITWIDTH ===");
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi trong lệnh TAN25_EDITWIDTH: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Lệnh load tick từ database
+        /// </summary>
+        [CommandMethod("TAN25_LOADTEMP")]
+        public static void LoadTempTicks()
+        {
+            Document doc = Application.DocumentManager.MdiActiveDocument;
+            Editor ed = doc.Editor;
+            Database db = doc.Database;
+
+            ed.WriteMessage("\n=== BẮT ĐẦU LỆNH TAN25_LOADTEMP ===");
+
+            try
+            {
+                // Đảm bảo overrule được kích hoạt
+                if (_overrule == null)
+                {
+                    _overrule = new FilletOverrule();
+                    Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), _overrule, true);
+                    Overrule.Overruling = true;
+                    ed.WriteMessage("\nĐã kích hoạt tick overrule!");
+                }
+
+                ed.WriteMessage("\nĐang tìm polylines có tick trong database...");
+
+                // Đăng ký ứng dụng trước khi đọc XData
+                string appName = "HVAC_DUCT";
+                using (Transaction regTr = db.TransactionManager.StartTransaction())
+                {
+                    RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
+                    if (!regAppTable.Has(appName))
+                    {
+                        regAppTable.UpgradeOpen();
+                        RegAppTableRecord regAppRecord = new RegAppTableRecord();
+                        regAppRecord.Name = appName;
+                        regAppTable.Add(regAppRecord);
+                        regTr.AddNewlyCreatedDBObject(regAppRecord, true);
+                        ed.WriteMessage($"\nĐã đăng ký ứng dụng: {appName}");
+                    }
+                    regTr.Commit();
                 }
 
                 using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1401,620 +1522,89 @@ namespace HVAC_DUCT
                     BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
                     BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
 
+                    int totalPolylines = 0;
                     int count = 0;
-                    string[] lines = System.IO.File.ReadAllLines(tempFilePath);
-                    
-                    ed.WriteMessage($"\nĐọc được {lines.Length} dòng từ file tạm");
-                    
-                    // Lưu width đầu tiên để cập nhật overrule
-                    double firstWidth = 8.0; // Mặc định
-                    bool hasFirstWidth = false;
-                    
-                    foreach (string line in lines)
+                    foreach (ObjectId objId in btr)
                     {
-                        string[] parts = line.Split(',');
-                        if (parts.Length >= 2)
+                        try
                         {
-                            try
+                            if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
                             {
-                                // Tìm polyline theo Handle
-                                long handleValue = long.Parse(parts[0]);
-                                Handle handle = new Handle(handleValue);
-                                ObjectId objId = db.GetObjectId(false, handle, 0);
+                                totalPolylines++;
+                                Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                                 
-                                if (objId != ObjectId.Null && objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                                // Kiểm tra XData có chứa thông tin tick không
+                                if (pl.XData != null)
                                 {
-                                    // Đọc width với format F1 (1 chữ số thập phân)
-                                    double blueWidth = double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
+                                    ResultBuffer rb = pl.XData;
+                                    double blueWidth = 8.0; // Mặc định
+                                    bool isHVACDuct = false;
                                     
-                                    // Lưu width đầu tiên để cập nhật overrule
-                                    if (!hasFirstWidth)
+                                    ed.WriteMessage($"\nTìm thấy polyline Handle: {objId.Handle.Value} có XData");
+                                    
+                                    // Debug: Hiển thị tất cả XData
+                                    ed.WriteMessage($"\nXData chi tiết cho Handle {objId.Handle.Value}:");
+                                    foreach (TypedValue tv in rb)
                                     {
-                                        firstWidth = blueWidth;
-                                        hasFirstWidth = true;
-                                        ed.WriteMessage($"\nTìm thấy width đã lưu: {firstWidth:F1}");
+                                        ed.WriteMessage($"\n  TypeCode: {tv.TypeCode}, Value: {tv.Value}");
+                                    }
+                                    
+                                    // Kiểm tra tên ứng dụng và tìm width
+                                    foreach (TypedValue tv in rb)
+                                    {
+                                        if (tv.TypeCode == 1001) // Tên ứng dụng
+                                        {
+                                            if (tv.Value.ToString() == "HVAC_DUCT")
+                                            {
+                                                isHVACDuct = true;
+                                                ed.WriteMessage($"\nTìm thấy ứng dụng: {tv.Value}");
+                                            }
+                                        }
+                                        else if (tv.TypeCode == 1040) // Double - Width
+                                        {
+                                            blueWidth = (double)tv.Value;
+                                            ed.WriteMessage($"\nTìm thấy width: {blueWidth:F1}");
+                                        }
+                                    }
+                                    
+                                    // Chỉ load tick nếu là ứng dụng HVAC_DUCT
+                                    if (!isHVACDuct)
+                                    {
+                                        ed.WriteMessage($"\nBỏ qua polyline Handle: {objId.Handle.Value} - không phải HVAC_DUCT");
+                                        continue;
                                     }
                                     
                                     // Thêm vào danh sách hiển thị với width riêng
                                     FilletOverrule.AddAllowedPolylineWithWidth(objId, blueWidth);
                                     count++;
-                                    ed.WriteMessage($"\nĐã load tick cho Handle: {handleValue}, BlueWidth: {blueWidth:F1}");
+                                    ed.WriteMessage($"\nĐã load tick cho Handle: {objId.Handle.Value}, BlueWidth: {blueWidth:F1}");
                                 }
                                 else
                                 {
-                                    ed.WriteMessage($"\nHandle {handleValue}: Polyline không tồn tại");
+                                    ed.WriteMessage($"\nPolyline Handle: {objId.Handle.Value} không có XData");
                                 }
                             }
-                            catch (System.Exception ex)
-                            {
-                                ed.WriteMessage($"\nLỗi đọc Handle {parts[0]}: {ex.Message}");
-                            }
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ed.WriteMessage($"\nLỗi khi xử lý polyline: {ex.Message}");
+                            continue;
                         }
                     }
-                    
-                    // Cập nhật width cho overrule (sử dụng width đầu tiên)
-                    if (hasFirstWidth && FilletOverruleCmd._overrule != null)
-                    {
-                        FilletOverruleCmd._overrule.UpdateBlueWidth(firstWidth);
-                        ed.WriteMessage($"\nĐã cập nhật overrule với width: {firstWidth:F1}");
-                    }
-                    else
-                    {
-                        ed.WriteMessage($"\nKhông tìm thấy width, sử dụng mặc định: {firstWidth:F1}");
-                    }
 
-                            tr.Commit();
-                    ed.WriteMessage($"\nĐã tải lại {count} tick từ file tạm!");
-                    
-                    // Refresh màn hình để hiển thị tick
-                    doc.Editor.Regen();
+                    tr.Commit();
+                    ed.WriteMessage($"\nTổng số polyline trong drawing: {totalPolylines}");
+                    ed.WriteMessage($"\nĐã tải lại tick cho {count} polyline từ database!");
                 }
-            }
-            catch (System.Exception ex)
-                {
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
-            }
 
-            /// <summary>
-        /// Tự động load tick khi mở file (gọi từ DocumentManager)
-            /// </summary>
-        [CommandMethod("AUTOLOADTICKS")]
-        public static void AutoLoadTicks()
-        {
-            try
-            {
-                // Gọi LoadTempTicks để tự động load tick
-                LoadTempTicks();
-            }
-            catch
-            {
-                // Bỏ qua lỗi nếu có
-            }
-        }
-
-        /// <summary>
-        /// Lệnh đơn giản để load tick (gõ nhanh)
-        /// </summary>
-        [CommandMethod("LT")]
-        public static void LoadTicksShort()
-        {
-            LoadTempTicks();
-        }
-
-        /// <summary>
-        /// Tự động load tick khi mở file (gọi từ DocumentManager)
-        /// </summary>
-        [CommandMethod("AUTOLOAD")]
-        public static void AutoLoad()
-        {
-            try
-            {
-                // Tự động load tick khi mở file
-                LoadTempTicks();
-            }
-            catch
-            {
-                // Bỏ qua lỗi nếu có
-            }
-        }
-
-        /// <summary>
-        /// Lệnh đơn giản để load tick tự động (gõ khi mở file)
-        /// </summary>
-        [CommandMethod("AUTO")]
-        public static void AutoLoadTicksSimple()
-        {
-            try
-            {
-                // Load tick tự động
-                LoadTempTicks();
+                // Refresh màn hình để hiển thị tick
+                doc.Editor.Regen();
+                ed.WriteMessage("\n=== KẾT THÚC LỆNH TAN25_LOADTEMP ===");
             }
             catch (System.Exception ex)
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
-                }
-            }
-
-            /// <summary>
-        /// Lệnh tự động chạy khi mở file (có thể thêm vào startup)
-            /// </summary>
-        [CommandMethod("HVACSTARTUP")]
-        public static void HvacStartup()
-        {
-            try
-            {
-                // Tự động load tick khi mở file
-                LoadTempTicks();
-            }
-            catch
-            {
-                // Bỏ qua lỗi nếu có
-            }
-        }
-
-        /// <summary>
-        /// Đăng ký sự kiện xóa object để dọn dẹp file tick
-        /// </summary>
-        [CommandMethod("REGISTERERASE")]
-        public static void RegisterEraseHandler()
-        {
-            try
-            {
-                if (!_isObjectErasedHandlerRegistered)
-                {
-                    // Đăng ký sự kiện ObjectErased
-                    Application.DocumentManager.DocumentLockModeChanged += OnDocumentLockModeChanged;
-                    _isObjectErasedHandlerRegistered = true;
-                    
-                    Document doc = Application.DocumentManager.MdiActiveDocument;
-                    Editor ed = doc.Editor;
-                    ed.WriteMessage("\nĐã đăng ký sự kiện xóa object!");
-                }
-                else
-                {
-                    Document doc = Application.DocumentManager.MdiActiveDocument;
-                    Editor ed = doc.Editor;
-                    ed.WriteMessage("\nSự kiện xóa object đã được đăng ký!");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                ed.WriteMessage($"\nLỗi đăng ký: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Sự kiện khi document lock mode thay đổi (có thể do xóa object)
-        /// </summary>
-        private static void OnDocumentLockModeChanged(object sender, DocumentLockModeChangedEventArgs e)
-        {
-            try
-            {
-                // Kiểm tra nếu có object bị xóa
-                if (e.GlobalCommandName == "ERASE" || e.GlobalCommandName == "DELETE")
-                {
-                    // Delay để đảm bảo object đã được xóa
-                    System.Threading.Tasks.Task.Delay(500).ContinueWith(t =>
-                    {
-                        try
-                        {
-                            CleanupDeletedObjects();
-                        }
-                        catch
-                        {
-                            // Bỏ qua lỗi nếu có
-                        }
-                    });
-                }
-            }
-            catch
-            {
-                // Bỏ qua lỗi nếu có
-            }
-        }
-
-        /// <summary>
-        /// Dọn dẹp file tick khi object bị xóa
-        /// </summary>
-        private static void CleanupDeletedObjects()
-        {
-            try
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                // Lấy đường dẫn file tick
-                string filePath = doc.Name;
-                string tickFilePath;
-                
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    string fileName = "Drawing1";
-                    tickFilePath = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(), 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                }
-                else
-                {
-                    string projectDir = System.IO.Path.GetDirectoryName(filePath);
-                    string fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-                    tickFilePath = System.IO.Path.Combine(
-                        projectDir, 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                }
-
-                if (!System.IO.File.Exists(tickFilePath))
-                {
-                    return; // Không có file tick
-                }
-
-                // Đọc file tick hiện tại
-                string[] lines = System.IO.File.ReadAllLines(tickFilePath);
-                List<string> validLines = new List<string>();
-                int removedCount = 0;
-
-                foreach (string line in lines)
-                {
-                    string[] parts = line.Split(',');
-                    if (parts.Length >= 2)
-                    {
-                        try
-                        {
-                            // Kiểm tra Handle có còn tồn tại không
-                            long handleValue = long.Parse(parts[0]);
-                            Handle handle = new Handle(handleValue);
-                            ObjectId objId = db.GetObjectId(false, handle, 0);
-                            
-                            if (objId != ObjectId.Null && objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
-                            {
-                                // Object còn tồn tại, giữ lại
-                                validLines.Add(line);
-                            }
-                            else
-                            {
-                                // Object đã bị xóa, loại bỏ
-                                removedCount++;
-                            }
-                        }
-                        catch
-                        {
-                            // Dòng lỗi, loại bỏ
-                            removedCount++;
-                        }
-                    }
-                    else
-                    {
-                        // Dòng không hợp lệ, loại bỏ
-                        removedCount++;
-                    }
-                }
-
-                // Ghi lại file tick với dữ liệu đã dọn dẹp
-                System.IO.File.WriteAllLines(tickFilePath, validLines);
-                
-                if (removedCount > 0)
-                {
-                    ed.WriteMessage($"\nĐã dọn dẹp {removedCount} object đã bị xóa khỏi file tick!");
-                }
-            }
-            catch
-            {
-                // Bỏ qua lỗi nếu có
-            }
-            }
-
-        /// <summary>
-        /// Dọn dẹp file tick thủ công (xóa dữ liệu của object đã bị xóa)
-        /// </summary>
-        [CommandMethod("CLEANUPTICKS")]
-        public static void CleanupTicks()
-        {
-            try
-            {
-                CleanupDeletedObjects();
-            }
-            catch (System.Exception ex)
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
                 ed.WriteMessage($"\nLỗi: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Xóa file tạm chứa thông tin tick
-        /// </summary>
-        [CommandMethod("CLEARTEMP")]
-        public static void ClearTempTicks()
-            {
-                try
-                {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                
-                // Lấy đường dẫn file hiện tại
-                string filePath = doc.Name;
-                string tempFilePath;
-                
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    // Nếu chưa có tên file, tìm trong thư mục Temp
-                    string fileName = "Drawing1";
-                    tempFilePath = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(), 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                }
-                else
-                {
-                    // Lấy thư mục chứa file dự án
-                    string projectDir = System.IO.Path.GetDirectoryName(filePath);
-                    string fileName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-                    
-                    // Tìm file tạm trong thư mục dự án
-                    tempFilePath = System.IO.Path.Combine(
-                        projectDir, 
-                        $"HVAC_DUCT_Ticks_{fileName}.txt"
-                    );
-                }
-                
-                if (System.IO.File.Exists(tempFilePath))
-                {
-                    System.IO.File.Delete(tempFilePath);
-                    ed.WriteMessage($"\nĐã xóa file tạm: {System.IO.Path.GetFileName(tempFilePath)}");
-                }
-                else
-                {
-                    ed.WriteMessage($"\nKhông tìm thấy file tạm: {System.IO.Path.GetFileName(tempFilePath)}");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                ed.WriteMessage($"\nLỗi: {ex.Message}");
-            }
-            }
-
-            /// <summary>
-        /// Tạo và lưu tick thực sự vào database
-            /// </summary>
-        private static void CreateAndSaveTicks(Autodesk.AutoCAD.DatabaseServices.Polyline pl, Transaction tr, BlockTableRecord btr)
-            {
-                try
-                {
-                // Tạo danh sách điểm cho polyline fit
-                List<Point3d> fitPoints = new List<Point3d>();
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                    fitPoints.Add(pl.GetPoint3dAt(i));
-                }
-                
-                if (pl.Closed && pl.NumberOfVertices > 2)
-                {
-                    fitPoints.Add(pl.GetPoint3dAt(0));
-                }
-                
-                // Tính tổng chiều dài polyline fit
-                double totalLength = 0.0;
-                for (int i = 0; i < fitPoints.Count - 1; i++)
-                {
-                    totalLength += fitPoints[i].DistanceTo(fitPoints[i + 1]);
-                }
-                
-                if (totalLength <= 0) return;
-                
-                // Tạo tick với khoảng cách 12 inch
-                double spacing = 12.0;
-                double tickLength = 6.0;
-                
-                for (double distance = 0; distance <= totalLength; distance += spacing)
-                {
-                    if (distance > totalLength) distance = totalLength;
-                    
-                    // Lấy điểm trên polyline fit
-                    Point3d pointOnPl = GetPointOnPolylineAtDistance(fitPoints, distance);
-                    Vector3d tangent = GetTangentOnPolylineAtDistance(fitPoints, distance);
-                    
-                    if (tangent.Length > 0)
-                    {
-                        // Tạo tick vuông góc
-                        Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0).GetNormal();
-                        
-                        // Tick đỏ (đoạn ngắn)
-                        Point3d tickStart = pointOnPl + normal * (tickLength / 2);
-                        Point3d tickEnd = pointOnPl - normal * (tickLength / 2);
-                        
-                        // Tạo line cho tick
-                        Line tickLine = new Line(tickStart, tickEnd);
-                        tickLine.Color = Color.FromColorIndex(ColorMethod.ByAci, 1); // Màu đỏ
-                        
-                        btr.AppendEntity(tickLine);
-                        tr.AddNewlyCreatedDBObject(tickLine, true);
-                    }
-                }
-                }
-                catch
-                {
-                    // Bỏ qua lỗi nếu có
-                }
-            }
-
-            /// <summary>
-        /// Lấy điểm trên polyline tại khoảng cách cho trước
-            /// </summary>
-        private static Point3d GetPointOnPolylineAtDistance(List<Point3d> points, double distance)
-        {
-            if (points.Count < 2) return points[0];
-            
-            double currentLength = 0.0;
-            for (int i = 0; i < points.Count - 1; i++)
-            {
-                double segmentLength = points[i].DistanceTo(points[i + 1]);
-                if (currentLength + segmentLength >= distance)
-                {
-                    double t = (distance - currentLength) / segmentLength;
-                    return new Point3d(
-                        points[i].X + (points[i + 1].X - points[i].X) * t,
-                        points[i].Y + (points[i + 1].Y - points[i].Y) * t,
-                        points[i].Z + (points[i + 1].Z - points[i].Z) * t
-                    );
-                }
-                currentLength += segmentLength;
-            }
-            
-            return points[points.Count - 1];
-            }
-
-            /// <summary>
-        /// Lấy vector tiếp tuyến trên polyline tại khoảng cách cho trước
-            /// </summary>
-        private static Vector3d GetTangentOnPolylineAtDistance(List<Point3d> points, double distance)
-        {
-            if (points.Count < 2) return new Vector3d(1, 0, 0);
-            
-            double currentLength = 0.0;
-            for (int i = 0; i < points.Count - 1; i++)
-            {
-                double segmentLength = points[i].DistanceTo(points[i + 1]);
-                if (currentLength + segmentLength >= distance)
-                {
-                    return (points[i + 1] - points[i]).GetNormal();
-                }
-                currentLength += segmentLength;
-            }
-            
-            return (points[points.Count - 1] - points[points.Count - 2]).GetNormal();
-            }
-
-            /// <summary>
-        /// Lệnh break duct và tự động vẽ tick cho polyline đã break
-            /// </summary>
-        [CommandMethod("BREAKDUCT")]
-        public static void BreakDuct()
-            {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                Database db = doc.Database;
-
-                try
-                {
-                // Bước 1: Chọn polyline cần break
-                PromptEntityOptions plOpts = new PromptEntityOptions("\nChọn polyline cần break: ");
-                plOpts.SetRejectMessage("\nVui lòng chọn polyline!");
-                plOpts.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
-
-                PromptEntityResult plResult = ed.GetEntity(plOpts);
-                if (plResult.Status != PromptStatus.OK) return;
-
-                ObjectId plId = plResult.ObjectId;
-
-                // Bước 2: Chọn điểm break thứ nhất
-                PromptPointOptions pt1Opts = new PromptPointOptions("\nChọn điểm break thứ nhất: ");
-                PromptPointResult pt1Result = ed.GetPoint(pt1Opts);
-                if (pt1Result.Status != PromptStatus.OK) return;
-
-                Point3d breakPoint1 = pt1Result.Value;
-
-                // Bước 3: Chọn điểm break thứ hai
-                PromptPointOptions pt2Opts = new PromptPointOptions("\nChọn điểm break thứ hai: ");
-                pt2Opts.UseBasePoint = true;
-                pt2Opts.BasePoint = breakPoint1;
-                PromptPointResult pt2Result = ed.GetPoint(pt2Opts);
-                if (pt2Result.Status != PromptStatus.OK) return;
-
-                Point3d breakPoint2 = pt2Result.Value;
-
-                // Bước 4: Thực hiện break polyline
-                    using (Transaction tr = db.TransactionManager.StartTransaction())
-                    {
-                    Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(plId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
-
-                        if (pl != null)
-                        {
-                        // Tìm điểm gần nhất trên polyline
-                        Point3d closestPoint1 = pl.GetClosestPointTo(breakPoint1, false);
-                        Point3d closestPoint2 = pl.GetClosestPointTo(breakPoint2, false);
-                        
-                        // Tìm parameter của điểm gần nhất
-                        double param1 = pl.GetParameterAtPoint(closestPoint1);
-                        double param2 = pl.GetParameterAtPoint(closestPoint2);
-                        
-                        // Đảm bảo param1 < param2
-                        if (param1 > param2)
-                        {
-                            double temp = param1;
-                            param1 = param2;
-                            param2 = temp;
-                        }
-                        
-                        // Tạo 2 polyline mới: đoạn trước break và đoạn sau break
-                        Autodesk.AutoCAD.DatabaseServices.Polyline pl1 = new Autodesk.AutoCAD.DatabaseServices.Polyline();
-                        Autodesk.AutoCAD.DatabaseServices.Polyline pl2 = new Autodesk.AutoCAD.DatabaseServices.Polyline();
-                        
-                        // Copy các vertex trước param1 (đoạn đầu) - bao gồm cả param1
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                            double param = i;
-                            if (param <= param1)
-                            {
-                                Point2d pt = pl.GetPoint2dAt(i);
-                                pl1.AddVertexAt(pl1.NumberOfVertices, pt, 0.0, 0.0, 0.0);
-                            }
-                        }
-                        
-                        // Copy các vertex sau param2 (đoạn cuối) - bao gồm cả param2
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                            double param = i;
-                            if (param >= param2)
-                            {
-                                Point2d pt = pl.GetPoint2dAt(i);
-                                pl2.AddVertexAt(pl2.NumberOfVertices, pt, 0.0, 0.0, 0.0);
-                            }
-                        }
-                        
-                        // Thêm các polyline mới vào ModelSpace
-                        BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-                        BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
-                        
-                        // Xóa polyline gốc
-                        pl.Erase();
-                        
-                        // Thêm polyline 1 nếu có vertex
-                        if (pl1.NumberOfVertices >= 2)
-                        {
-                            btr.AppendEntity(pl1);
-                            tr.AddNewlyCreatedDBObject(pl1, true);
-                            FilletOverrule.AddAllowedPolylineWithWidth(pl1.ObjectId, 8.0);
-                            SaveTickInfoToTempFile(pl1, 8.0); // Mặc định 8 inch
-                        }
-                        
-                        // Thêm polyline 2 nếu có vertex
-                        if (pl2.NumberOfVertices >= 2)
-                        {
-                            btr.AppendEntity(pl2);
-                            tr.AddNewlyCreatedDBObject(pl2, true);
-                            FilletOverrule.AddAllowedPolylineWithWidth(pl2.ObjectId, 8.0);
-                            SaveTickInfoToTempFile(pl2, 8.0); // Mặc định 8 inch
-                        }
-
-                            tr.Commit();
-                        ed.WriteMessage($"\nĐã break polyline! Polyline mới sẽ hiển thị tick tự động.");
-                        }
-                    }
-                }
-            catch (System.Exception ex)
-                {
-                    ed.WriteMessage($"\nLỗi: {ex.Message}");
+                ed.WriteMessage("\n=== LỖI TRONG LỆNH TAN25_LOADTEMP ===");
             }
         }
 
@@ -2059,16 +1649,12 @@ namespace HVAC_DUCT
                     jppo.Message = "\nChọn điểm tiếp theo (Space/Enter để kết thúc): ";
                 }
 
-                jppo.UserInputControls = UserInputControls.NullResponseAccepted | 
-                                       UserInputControls.Accept3dCoordinates | 
-                                       UserInputControls.NoZeroResponseAccepted |
-                                       UserInputControls.NoNegativeResponseAccepted |
-                                       UserInputControls.AcceptOtherInputString;
+                jppo.UserInputControls = UserInputControls.NullResponseAccepted;
 
                 if (_polyline.NumberOfVertices > 0)
                 {
-                    jppo.UseBasePoint = false; // Tắt UseBasePoint để zoom tốt hơn
-                    // jppo.BasePoint = _polyline.GetPoint3dAt(_polyline.NumberOfVertices - 1);
+                    jppo.UseBasePoint = true;
+                    jppo.BasePoint = _polyline.GetPoint3dAt(_polyline.NumberOfVertices - 1);
                 }
 
                 PromptPointResult ppr = prompts.AcquirePoint(jppo);
@@ -2102,8 +1688,8 @@ namespace HVAC_DUCT
                     return SamplerStatus.Cancel;
                 }
 
-                return SamplerStatus.Cancel;
-            }
+                    return SamplerStatus.Cancel;
+                }
 
 
             protected override bool WorldDraw(Autodesk.AutoCAD.GraphicsInterface.WorldDraw wd)
@@ -2275,5 +1861,6 @@ namespace HVAC_DUCT
                 }
             }
         }
+    }
     }
 }
