@@ -28,8 +28,8 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 5. Tick và MText sẽ tự động hiển thị
 
 **Kết quả**:
-- Polyline có XData chứa thông tin width
-- MText hiển thị width (ví dụ: "12"∅")
+- Polyline có XData chứa thông tin width và length
+- MText hiển thị width và length (ví dụ: "12"∅ x 24.5'")
 - Tick hiển thị trên polyline
 
 ---
@@ -45,7 +45,8 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 
 **Kết quả**:
 - Width được cập nhật trong XData
-- MText hiển thị width mới
+- Length được tính toán lại tự động
+- MText hiển thị width và length mới
 - Tick được vẽ lại với width mới
 
 ---
@@ -63,7 +64,8 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 **Kết quả**:
 - Polyline gốc bị xóa tick
 - 2 polyline mới được tạo
-- Mỗi polyline mới có XData và MText riêng
+- Mỗi polyline mới có XData (width, length) và MText riêng
+- Length được tính toán lại cho từng polyline mới
 - Tick hiển thị cho cả 2 polyline mới
 
 ---
@@ -105,7 +107,14 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 ### XData Structure:
 - **APP_NAME**: "HVAC_DUCT_SUPPLY_AIR"
 - **Width**: Double value (width của duct)
+- **Length**: Double value (độ dài của duct)
 - **MText Handle**: Handle của MText liên kết
+
+### XData Storage Details:
+- **TypeCode 1001**: Application name ("HVAC_DUCT_SUPPLY_AIR")
+- **TypeCode 1040**: Width value (Double)
+- **TypeCode 1040**: Length value (Double) 
+- **TypeCode 1005**: MText Handle (Long)
 
 ### Layer:
 - **M-ANNO-TAG-DUCT**: Layer cho MText (màu 50)
@@ -119,9 +128,16 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 ### API Components:
 - **DrawableOverrule**: Vẽ tick tùy chỉnh trên polyline
 - **Transaction Management**: Quản lý database operations
-- **XData System**: Lưu trữ dữ liệu tùy chỉnh
+- **XData System**: Lưu trữ dữ liệu tùy chỉnh (width, length, MText)
 - **MText API**: Tạo và quản lý text annotations
 - **Entity Selection**: Chọn và thao tác với entities
+- **Polyline Length Calculation**: Tính toán độ dài polyline tự động
+
+### Length Calculation:
+- **Method**: `Polyline.GetDistanceAtParameter()`
+- **Storage**: Lưu vào XData với TypeCode 1040
+- **Unit**: Theo đơn vị của drawing (inch/mm)
+- **Update**: Tự động cập nhật khi polyline thay đổi
 
 ## 🐛 Xử lý sự cố
 

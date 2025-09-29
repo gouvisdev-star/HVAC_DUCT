@@ -773,10 +773,10 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
                     // Mở polyline để ghi XData
                     var plForWrite = tr.GetObject(pl.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                     
-                    // Tạo ResultBuffer với tên ứng dụng, width và MText ObjectId
-                    ResultBuffer rb = new ResultBuffer();
-                    rb.Add(new TypedValue(1001, APP_NAME)); // Tên ứng dụng
-                    rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
+        // Tạo ResultBuffer với tên ứng dụng, width và MText ObjectId
+        ResultBuffer rb = new ResultBuffer();
+        rb.Add(new TypedValue(1001, APP_NAME)); // Tên ứng dụng
+        rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
                     
                     if (mtextId.HasValue && mtextId.Value.IsValid)
                     {
@@ -972,13 +972,13 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
                     regTr.Commit();
                 }
 
-                // Lấy MText ObjectId hiện có từ XData
-                ObjectId? existingMTextId = LoadMTextIdFromXData(pl);
+        // Lấy MText ObjectId hiện có từ XData
+        ObjectId? existingMTextId = LoadMTextIdFromXData(pl);
 
-                // Tạo ResultBuffer với tên ứng dụng, width mới và MText ObjectId (nếu có)
-                ResultBuffer rb = new ResultBuffer();
-                rb.Add(new TypedValue(1001, "HVAC_DUCT_SUPPLY_AIR")); // Tên ứng dụng
-                rb.Add(new TypedValue(1040, newWidth)); // Width as Double
+        // Tạo ResultBuffer với tên ứng dụng, width mới và MText ObjectId (nếu có)
+        ResultBuffer rb = new ResultBuffer();
+        rb.Add(new TypedValue(1001, "HVAC_DUCT_SUPPLY_AIR")); // Tên ứng dụng
+        rb.Add(new TypedValue(1040, newWidth)); // Width as Double
                 
                 if (existingMTextId.HasValue && existingMTextId.Value.IsValid)
                 {
@@ -1141,6 +1141,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
             }
         }
 
+
         /// <summary>
         /// Tạo hoặc lấy layer ID
         /// </summary>
@@ -1204,7 +1205,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
                 Vector3d tangent = GetTangentAtEnd(pl);
                 Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
                 
-                // Tạo text hiển thị width mới
+                // Tạo text chỉ hiển thị width (như trước)
                 var widthText = $"{newWidth:F0}\"∅";
                 
                 // Vị trí text bên ngoài polyline
@@ -1279,7 +1280,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
                 Vector3d tangent = GetTangentAtEnd(pl);
                 Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
                 
-                // Tạo text hiển thị width
+                // Tạo text chỉ hiển thị width (như trước)
                 var widthText = $"{width:F0}\"∅";
                 
                 // Vị trí text bên ngoài polyline
