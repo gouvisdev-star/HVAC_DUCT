@@ -11,22 +11,25 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace HVAC_DUCT
+namespace TAN2025_HVAC_DUCT
 {
+    /// <summary>
+    /// Main application class for HVAC Duct system
+    /// </summary>
     public class Supply_duct : IExtensionApplication
 {
         public void Initialize()
         {
-            // Khởi tạo overrule
-            FilletOverruleCmd.InitializeOverrule();
-            
-            // Auto load tick khi load DLL
             try
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
+                // Khởi tạo overrule
+                FilletOverruleCmd.InitializeOverrule();
+                
+                // Auto load tick khi load DLL
+                var doc = Application.DocumentManager.MdiActiveDocument;
                 if (doc != null)
                 {
-                    Editor ed = doc.Editor;
+                    var ed = doc.Editor;
                     ed.WriteMessage("\nAuto loading HVAC_DUCT ticks...");
                     
                     // Gọi trực tiếp method thay vì command
@@ -37,29 +40,64 @@ namespace HVAC_DUCT
             }
             catch (System.Exception ex)
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                if (doc != null)
-                {
-                    Editor ed = doc.Editor;
-                    ed.WriteMessage($"\nAuto load error: {ex.Message}");
-                }
-                System.Diagnostics.Debug.WriteLine($"Auto load error: {ex.Message}");
+                HandleException("Initialize", ex);
             }
         }
 
         public void Terminate()
         {
-            // Cleanup overrule
-            FilletOverruleCmd.CleanupOverrule();
+            try
+            {
+                // Cleanup overrule
+                FilletOverruleCmd.CleanupOverrule();
+            }
+            catch (System.Exception ex)
+            {
+                HandleException("Terminate", ex);
+            }
+        }
+
+        /// <summary>
+        /// Centralized exception handling
+        /// </summary>
+        /// <param name="methodName">Name of the method where exception occurred</param>
+        /// <param name="ex">Exception object</param>
+        private static void HandleException(string methodName, System.Exception ex)
+        {
+            try
+            {
+                var doc = Application.DocumentManager.MdiActiveDocument;
+                if (doc != null)
+                {
+                    var ed = doc.Editor;
+                    ed.WriteMessage($"\nError in {methodName}: {ex.Message}");
+                }
+                System.Diagnostics.Debug.WriteLine($"Error in {methodName}: {ex.Message}");
+            }
+            catch
+            {
+                // Fallback error handling
+                System.Diagnostics.Debug.WriteLine($"Critical error in {methodName}: {ex.Message}");
+            }
         }
     /// <summary>
-        /// DrawableOverrule để vẽ thêm các tick vuông góc với Polyline (không có fillet arc)
+    /// DrawableOverrule để vẽ thêm các tick vuông góc với Polyline (không có fillet arc)
     /// </summary>
     public class FilletOverrule : DrawableOverrule
     {
-        private static double _blueWidth = 8.0; // Độ dài đoạn xanh
-        private static System.Collections.Generic.HashSet<ObjectId> _allowedPolylines = new System.Collections.Generic.HashSet<ObjectId>();
-            private static Dictionary<ObjectId, double> _polylineWidths = new Dictionary<ObjectId, double>();
+        #region Constants
+        private const double DEFAULT_BLUE_WIDTH = 8.0;
+        private const double TICK_SPACING = 4.0;
+        private const double RED_LENGTH = 2.0;
+        private const int FILLET_SEGMENTS = 16;
+        private const double FILLET_RADIUS_PERCENT = 0.1;
+        #endregion
+
+        #region Private Fields
+        private static double _blueWidth = DEFAULT_BLUE_WIDTH;
+        private static readonly HashSet<ObjectId> _allowedPolylines = new HashSet<ObjectId>();
+        private static readonly Dictionary<ObjectId, double> _polylineWidths = new Dictionary<ObjectId, double>();
+        #endregion
 
         /// <summary>
         /// Constructor khởi tạo bộ lọc tùy chỉnh
@@ -117,284 +155,160 @@ namespace HVAC_DUCT
         }
 
 
+
         /// <summary>
-            /// Vẽ Polyline Fit mượt mà qua các điểm
+        /// Lấy điểm trên polyline tạm tại khoảng cách cho trước
         /// </summary>
-            /// <param name="points">Danh sách điểm</param>
-            /// <param name="wd">WorldDraw context</param>
-            private void DrawPolylineFit(List<Point3d> points, WorldDraw wd)
+        /// <param name="pl">Polyline gốc</param>
+        /// <param name="distance">Khoảng cách</param>
+        /// <returns>Điểm trên polyline tạm</returns>
+        private Point3d GetPointOnTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double distance)
         {
             try
             {
-                    if (points.Count < 2) return;
+                var fitPoints = CreateTempPolylinePoints(pl);
+                return GetPointOnPolylineAtDistance(fitPoints, distance);
+            }
+            catch
+            {
+                return pl.GetPointAtDist(distance);
+            }
+        }
 
-                    // Tạo Polyline Fit với các điểm trung gian để tạo đường cong mượt
-                    List<Point3d> fitPoints = new List<Point3d>();
-                    
+        /// <summary>
+        /// Lấy tiếp tuyến trên polyline tạm tại khoảng cách cho trước
+        /// </summary>
+        /// <param name="pl">Polyline gốc</param>
+        /// <param name="distance">Khoảng cách</param>
+        /// <returns>Vector tiếp tuyến</returns>
+        private Vector3d GetTangentOnTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double distance)
+        {
+            try
+            {
+                var fitPoints = CreateTempPolylinePoints(pl);
+                return GetTangentOnPolylineAtDistance(fitPoints, distance);
+            }
+            catch
+            {
+                // Fallback về polyline gốc
+                var param = pl.GetParameterAtPoint(pl.GetPointAtDist(distance));
+                var deltaParam = 0.01;
+                var p0 = Math.Max(pl.StartParam, param - deltaParam);
+                var p1 = Math.Min(pl.EndParam, param + deltaParam);
+                return pl.GetPointAtParameter(p1) - pl.GetPointAtParameter(p0);
+            }
+        }
+
+        /// <summary>
+        /// Tính chiều dài polyline tạm
+        /// </summary>
+        /// <param name="pl">Polyline gốc</param>
+        /// <returns>Chiều dài polyline tạm</returns>
+        private double GetTempPolylineLength(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                var fitPoints = CreateTempPolylinePoints(pl);
+                return CalculatePolylineLength(fitPoints);
+            }
+            catch
+            {
+                // Fallback về polyline gốc
+                try
+                {
+                    return pl.GetDistanceAtParameter(pl.EndParam);
+                }
+                catch
+                {
+                    return 0.0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tạo danh sách điểm cho polyline fit tạm
+        /// </summary>
+        /// <param name="pl">Polyline gốc</param>
+        /// <returns>Danh sách điểm polyline fit tạm</returns>
+        public List<Point3d> CreateTempPolylinePoints(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            var fitPoints = new List<Point3d>();
+            
+            try
+            {
+                if (pl.NumberOfVertices < 2) return fitPoints;
+
+                // Tạo danh sách điểm gốc
+                var originalPoints = new List<Point3d>();
+                for (int i = 0; i < pl.NumberOfVertices; i++)
+                {
+                    originalPoints.Add(pl.GetPoint3dAt(i));
+                }
+                
+                // Nếu polyline đóng, thêm điểm đầu
+                if (pl.Closed && pl.NumberOfVertices > 2)
+                {
+                    originalPoints.Add(pl.GetPoint3dAt(0));
+                }
+                
+                // Tạo polyline fit với bán kính bo góc
+                if (originalPoints.Count >= 3)
+                {
                     // Thêm điểm đầu
-                    fitPoints.Add(points[0]);
+                    fitPoints.Add(originalPoints[0]);
                     
-                    // Tạo các điểm trung gian cho Polyline Fit
-                    for (int i = 0; i < points.Count - 1; i++)
+                    for (int i = 1; i < originalPoints.Count - 1; i++)
                     {
-                        Point3d p1 = points[i];
-                        Point3d p2 = points[i + 1];
+                        var prev = originalPoints[i - 1];
+                        var current = originalPoints[i];
+                        var next = originalPoints[i + 1];
                         
-                        // Tạo các điểm trung gian để tạo đường cong mượt
-                        int segments = 6; // Số đoạn giữa 2 điểm
-                        for (int j = 1; j < segments; j++)
+                        // Tính bán kính bo góc = FILLET_RADIUS_PERCENT của đoạn ngắn nhất
+                        var dist1 = prev.DistanceTo(current);
+                        var dist2 = current.DistanceTo(next);
+                        var radius = Math.Min(dist1, dist2) * FILLET_RADIUS_PERCENT;
+                        
+                        // Tạo điểm bo góc
+                        var filletPoints = CreateFilletPoints(prev, current, next, radius);
+                        
+                        if (filletPoints.Count > 0)
                         {
-                            double t = (double)j / segments;
-                            
-                            // Sử dụng interpolation đơn giản để tạo đường cong mượt
-                            Point3d smoothPoint = new Point3d(
-                                p1.X + (p2.X - p1.X) * t,
-                                p1.Y + (p2.Y - p1.Y) * t,
-                                p1.Z + (p2.Z - p1.Z) * t
+                            fitPoints.AddRange(filletPoints);
+                        }
+                        else
+                        {
+                            // Fallback: tạo điểm trung gian đơn giản
+                            var midPoint1 = new Point3d(
+                                (prev.X + current.X) / 2,
+                                (prev.Y + current.Y) / 2,
+                                (prev.Z + current.Z) / 2
                             );
-                            fitPoints.Add(smoothPoint);
+                            var midPoint2 = new Point3d(
+                                (current.X + next.X) / 2,
+                                (current.Y + next.Y) / 2,
+                                (current.Z + next.Z) / 2
+                            );
+                            fitPoints.Add(midPoint1);
+                            fitPoints.Add(current);
+                            fitPoints.Add(midPoint2);
                         }
                     }
                     
                     // Thêm điểm cuối
-                    fitPoints.Add(points[points.Count - 1]);
-                    
-                    // Vẽ Polyline Fit bằng các line ngắn
-                    for (int i = 0; i < fitPoints.Count - 1; i++)
-                    {
-                        wd.Geometry.WorldLine(fitPoints[i], fitPoints[i + 1]);
-                    }
-                }
-                catch
-                {
-                    // Bỏ qua lỗi nếu có
-                }
-        }
-
-        /// <summary>
-            /// Lấy điểm trên polyline tạm tại khoảng cách cho trước
-        /// </summary>
-            /// <param name="pl">Polyline gốc</param>
-            /// <param name="distance">Khoảng cách</param>
-            /// <returns>Điểm trên polyline tạm</returns>
-            private Point3d GetPointOnTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double distance)
-        {
-            try
-            {
-                    // Tạo danh sách điểm cho polyline fit
-                    List<Point3d> fitPoints = new List<Point3d>();
-                    
-                    // Thêm tất cả các đỉnh của polyline
-                    for (int i = 0; i < pl.NumberOfVertices; i++)
-                    {
-                        fitPoints.Add(pl.GetPoint3dAt(i));
-                    }
-                    
-                    // Nếu polyline đóng, thêm điểm đầu
-                    if (pl.Closed && pl.NumberOfVertices > 2)
-                    {
-                        fitPoints.Add(pl.GetPoint3dAt(0));
-                    }
-                    
-                    // Tính tổng chiều dài polyline fit
-                    double totalLength = 0.0;
-                    for (int i = 0; i < fitPoints.Count - 1; i++)
-                    {
-                        totalLength += fitPoints[i].DistanceTo(fitPoints[i + 1]);
-                    }
-                    
-                    if (totalLength <= 0) return pl.GetPointAtDist(distance);
-                    
-                    // Chuẩn hóa distance
-                        if (distance > totalLength) distance = totalLength;
-
-                    // Tìm điểm trên polyline fit
-                    double currentLength = 0.0;
-                    for (int i = 0; i < fitPoints.Count - 1; i++)
-                    {
-                        double segmentLength = fitPoints[i].DistanceTo(fitPoints[i + 1]);
-                        if (currentLength + segmentLength >= distance)
-                        {
-                            double t = (distance - currentLength) / segmentLength;
-                            return new Point3d(
-                                fitPoints[i].X + (fitPoints[i + 1].X - fitPoints[i].X) * t,
-                                fitPoints[i].Y + (fitPoints[i + 1].Y - fitPoints[i].Y) * t,
-                                fitPoints[i].Z + (fitPoints[i + 1].Z - fitPoints[i].Z) * t
-                            );
-                        }
-                        currentLength += segmentLength;
-                    }
-                    
-                    return fitPoints[fitPoints.Count - 1];
-            }
-            catch
-            {
-                    return pl.GetPointAtDist(distance);
-            }
-        }
-
-        /// <summary>
-            /// Lấy tiếp tuyến trên polyline tạm tại khoảng cách cho trước
-        /// </summary>
-            /// <param name="pl">Polyline gốc</param>
-            /// <param name="distance">Khoảng cách</param>
-            /// <returns>Vector tiếp tuyến</returns>
-            private Vector3d GetTangentOnTempPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double distance)
-            {
-                try
-                {
-                    // Lấy điểm trước và sau để tính tiếp tuyến
-                    double delta = 0.1;
-                    Point3d p1 = GetPointOnTempPolyline(pl, Math.Max(0, distance - delta));
-                    Point3d p2 = GetPointOnTempPolyline(pl, distance + delta);
-                    
-                    return p2 - p1;
-            }
-            catch
-            {
-                    // Fallback về polyline gốc
-                    double param = pl.GetParameterAtPoint(pl.GetPointAtDist(distance));
-                            double deltaParam = 0.01;
-                            double p0 = Math.Max(pl.StartParam, param - deltaParam);
-                            double p1 = Math.Min(pl.EndParam, param + deltaParam);
-                    return pl.GetPointAtParameter(p1) - pl.GetPointAtParameter(p0);
-                }
-        }
-
-        /// <summary>
-            /// Tính chiều dài polyline tạm
-        /// </summary>
-            /// <param name="pl">Polyline gốc</param>
-            /// <returns>Chiều dài polyline tạm</returns>
-            private double GetTempPolylineLength(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
-        {
-                try
-            {
-                    // Tạo danh sách điểm cho polyline fit
-                    List<Point3d> fitPoints = new List<Point3d>();
-                    
-                    // Thêm tất cả các đỉnh của polyline
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                        fitPoints.Add(pl.GetPoint3dAt(i));
-                    }
-                    
-                    // Nếu polyline đóng, thêm điểm đầu
-                    if (pl.Closed && pl.NumberOfVertices > 2)
-                    {
-                        fitPoints.Add(pl.GetPoint3dAt(0));
-                    }
-                    
-                    // Tính tổng chiều dài polyline fit
-                    double totalLength = 0.0;
-                    for (int i = 0; i < fitPoints.Count - 1; i++)
-                    {
-                        totalLength += fitPoints[i].DistanceTo(fitPoints[i + 1]);
-                    }
-                    
-                    return totalLength;
-                        }
-                        catch
-                        {
-                    // Fallback về polyline gốc
-                    try
-                    {
-                        return pl.GetDistanceAtParameter(pl.EndParam);
-                    }
-                    catch
-                    {
-                        return 0.0;
-                    }
-                }
-        }
-
-        /// <summary>
-            /// Tạo danh sách điểm cho polyline fit tạm
-        /// </summary>
-            /// <param name="pl">Polyline gốc</param>
-            /// <returns>Danh sách điểm polyline fit tạm</returns>
-            public List<Point3d> CreateTempPolylinePoints(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
-            {
-                List<Point3d> fitPoints = new List<Point3d>();
-                
-                try
-                {
-                    if (pl.NumberOfVertices < 2) return fitPoints;
-
-                    // Tạo danh sách điểm gốc
-                    List<Point3d> originalPoints = new List<Point3d>();
-                for (int i = 0; i < pl.NumberOfVertices; i++)
-                {
-                        originalPoints.Add(pl.GetPoint3dAt(i));
-                    }
-                    
-                    // Nếu polyline đóng, thêm điểm đầu
-                    if (pl.Closed && pl.NumberOfVertices > 2)
-                    {
-                        originalPoints.Add(pl.GetPoint3dAt(0));
-                    }
-                    
-                    // Tạo polyline fit với bán kính bo góc 10%
-                    if (originalPoints.Count >= 3)
-                    {
-                        // Thêm điểm đầu
-                        fitPoints.Add(originalPoints[0]);
-                        
-                        for (int i = 1; i < originalPoints.Count - 1; i++)
-                        {
-                            Point3d prev = originalPoints[i - 1];
-                            Point3d current = originalPoints[i];
-                            Point3d next = originalPoints[i + 1];
-                            
-                            // Tính bán kính bo góc = 10% của đoạn ngắn nhất
-                            double dist1 = Math.Sqrt(Math.Pow(prev.X - current.X, 2) + Math.Pow(prev.Y - current.Y, 2) + Math.Pow(prev.Z - current.Z, 2));
-                            double dist2 = Math.Sqrt(Math.Pow(current.X - next.X, 2) + Math.Pow(current.Y - next.Y, 2) + Math.Pow(current.Z - next.Z, 2));
-                            double radius = Math.Min(dist1, dist2) * 0.1; // 10%
-                            
-                            // Tạo điểm bo góc
-                            List<Point3d> filletPoints = CreateFilletPoints(prev, current, next, radius);
-                            
-                            if (filletPoints.Count > 0)
-                            {
-                                fitPoints.AddRange(filletPoints);
+                    fitPoints.Add(originalPoints[originalPoints.Count - 1]);
                 }
                 else
                 {
-                                // Fallback: tạo điểm trung gian đơn giản
-                                Point3d midPoint1 = new Point3d(
-                                    (prev.X + current.X) / 2,
-                                    (prev.Y + current.Y) / 2,
-                                    (prev.Z + current.Z) / 2
-                                );
-                                Point3d midPoint2 = new Point3d(
-                                    (current.X + next.X) / 2,
-                                    (current.Y + next.Y) / 2,
-                                    (current.Z + next.Z) / 2
-                                );
-                                fitPoints.Add(midPoint1);
-                                fitPoints.Add(current);
-                                fitPoints.Add(midPoint2);
-                            }
-                        }
-                        
-                        // Thêm điểm cuối
-                        fitPoints.Add(originalPoints[originalPoints.Count - 1]);
-                    }
-                    else
-                    {
-                        // Nếu ít hơn 3 điểm, chỉ copy các điểm gốc
-                        for (int i = 0; i < originalPoints.Count; i++)
-                        {
-                            fitPoints.Add(originalPoints[i]);
-                        }
-                    }
+                    // Nếu ít hơn 3 điểm, chỉ copy các điểm gốc
+                    fitPoints.AddRange(originalPoints);
                 }
-                catch
-                {
-                    // Nếu có lỗi, trả về danh sách rỗng
-                }
-                
-                return fitPoints;
+            }
+            catch
+            {
+                // Nếu có lỗi, trả về danh sách rỗng
+            }
+            
+            return fitPoints;
         }
 
         /// <summary>
@@ -471,10 +385,9 @@ namespace HVAC_DUCT
                     bool isClockwise = crossCheck.Z < 0;
                     
                     // Tạo các điểm trên cung tròn thực sự
-                    int segments = 16; // Tăng số đoạn để mượt hơn
-                for (int i = 0; i <= segments; i++)
-                {
-                    double t = (double)i / segments;
+                    for (int i = 0; i <= FILLET_SEGMENTS; i++)
+                    {
+                        var t = (double)i / FILLET_SEGMENTS;
                         double currentAngle = t * filletAngle;
                         
                         // Nếu cung ngược chiều, đảo ngược góc
@@ -507,140 +420,7 @@ namespace HVAC_DUCT
             return filletPoints;
         }
 
-        /// <summary>
-            /// Áp vát mềm cho danh sách điểm (giống TAN_SOFT_CHAMFER)
-        /// </summary>
-            /// <param name="originalPoints">Danh sách điểm gốc</param>
-            /// <param name="softness">Bán kính vát mềm</param>
-            /// <returns>Danh sách điểm đã vát mềm</returns>
-            private List<Point3d> ApplySoftChamferToPoints(List<Point3d> originalPoints, double softness)
-            {
-                List<Point3d> softPoints = new List<Point3d>();
-                
-                try
-                {
-                    if (originalPoints.Count < 3) return originalPoints;
-                    
-                    // Copy danh sách điểm gốc
-                    softPoints.AddRange(originalPoints);
-                    
-                    // Áp vát mềm toàn bộ (giống TAN_SOFT_CHAMFER)
-                    int i = 1;
-                    while (i < softPoints.Count - 1)
-                    {
-                        int iPrev = i - 1;
-                        int iMid = i;
-                        int iNext = i + 1;
-                        int before = softPoints.Count;
-                        
-                        // Tạo vát mềm tại góc (giống ApplySoftChamfer)
-                        List<Point3d> chamferPoints = ApplySoftChamfer(
-                            softPoints[iPrev], 
-                            softPoints[iMid], 
-                            softPoints[iNext], 
-                            softness
-                        );
-                        
-                        // Thay thế điểm góc bằng các điểm vát mềm
-                        if (chamferPoints.Count > 1)
-                        {
-                            softPoints.RemoveAt(iMid); // Xóa điểm góc
-                            softPoints.InsertRange(iMid, chamferPoints); // Thêm các điểm vát mềm
-                        }
-                        
-                        int after = softPoints.Count;
-                        i += (after > before) ? 2 : 1; // Tăng i theo logic TAN_SOFT_CHAMFER
-                    }
-                }
-                catch
-                {
-                    // Nếu có lỗi, trả về danh sách gốc
-                    return originalPoints;
-                }
-                
-                return softPoints;
-            }
 
-        /// <summary>
-            /// Áp vát mềm tại một góc (giống ApplySoftChamfer)
-        /// </summary>
-            /// <param name="prev">Điểm trước</param>
-            /// <param name="current">Điểm hiện tại</param>
-            /// <param name="next">Điểm sau</param>
-            /// <param name="softness">Bán kính vát mềm</param>
-            /// <returns>Danh sách điểm vát mềm</returns>
-            private List<Point3d> ApplySoftChamfer(Point3d prev, Point3d current, Point3d next, double softness)
-            {
-                List<Point3d> chamferPoints = new List<Point3d>();
-                
-                try
-                {
-                    // Vector từ prev đến current và từ current đến next
-                    Vector3d v1 = (current - prev).GetNormal();
-                    Vector3d v2 = (next - current).GetNormal();
-
-                    // Tính góc giữa 2 vector
-                    double angle = Math.Acos(Math.Max(-1.0, Math.Min(1.0, v1.DotProduct(v2))));
-
-                    // Nếu góc quá nhỏ hoặc quá lớn, không tạo vát mềm
-                    if (angle < 0.1 || angle > Math.PI - 0.1)
-                    {
-                        return chamferPoints; // Trả về rỗng để không thay thế điểm
-                    }
-
-                    // Tính khoảng cách từ đỉnh đến điểm bắt đầu vát mềm
-                    double distance = softness / Math.Tan(angle / 2.0);
-
-                    // Kiểm tra khoảng cách có hợp lệ không
-                    if (distance <= 0 || double.IsNaN(distance) || double.IsInfinity(distance))
-                    {
-                        return chamferPoints; // Trả về rỗng để không thay thế điểm
-                    }
-
-                    // Điểm bắt đầu và kết thúc vát mềm
-                    Point3d startPoint = current - v1 * distance;
-                    Point3d endPoint = current + v2 * distance;
-
-                    // Tâm của cung tròn
-                    Vector3d bisector = (v1 + v2).GetNormal();
-                    double centerDistance = softness / Math.Sin(angle / 2.0);
-                    
-                    // Kiểm tra centerDistance có hợp lệ không
-                    if (centerDistance <= 0 || double.IsNaN(centerDistance) || double.IsInfinity(centerDistance))
-                    {
-                        return chamferPoints; // Trả về rỗng để không thay thế điểm
-                    }
-
-                    Point3d center = current + bisector * centerDistance;
-                    
-                    // Tạo các điểm cung tròn
-                    Vector3d startVec = (startPoint - center).GetNormal();
-                    Vector3d endVec = (endPoint - center).GetNormal();
-
-                    double startAngle = Math.Atan2(startVec.Y, startVec.X);
-                    double endAngle = Math.Atan2(endVec.Y, endVec.X);
-
-                    // Đảm bảo góc tăng dần
-                    if (endAngle < startAngle) endAngle += 2 * Math.PI;
-
-                    // Tạo các điểm cung tròn - SỐ LƯỢNG ĐIỂM PHỤ THUỘC VÀO GÓC
-                    int segments = Math.Max(8, Math.Min(32, (int)(Math.Abs(endAngle - startAngle) * 180 / Math.PI)));
-                    double angleStep = (endAngle - startAngle) / segments;
-
-                    for (int i = 0; i <= segments; i++)
-                    {
-                        double angle1 = startAngle + i * angleStep;
-                        Point3d pt = center + new Vector3d(Math.Cos(angle1), Math.Sin(angle1), 0) * softness;
-                        chamferPoints.Add(pt);
-                    }
-                }
-                catch
-                {
-                    // Nếu có lỗi, trả về rỗng để không thay thế điểm
-                }
-
-                return chamferPoints;
-            }
 
 
         /// <summary>
@@ -792,19 +572,15 @@ namespace HVAC_DUCT
                     double totalLength = CalculatePolylineLength(tempPolylinePoints);
                     if (totalLength <= 0.0) return true;
 
-                    // Khoảng cách giữa các tick (4 inch)
-                    double tickSpacing = 4.0;
-
                     // Số lượng tick
-                    int tickCount = (int)Math.Round(totalLength / tickSpacing);
+                    var tickCount = (int)Math.Round(totalLength / TICK_SPACING);
                     if (tickCount < 1) tickCount = 1;
-                    double actualSpacing = totalLength / tickCount;
+                    var actualSpacing = totalLength / tickCount;
 
-                    // Tham số tick: đỏ 2" + xanh (có thể thay đổi) + đỏ 2"
-                    double redLength = 2.0;
-                    double blueLength = GetPolylineWidth(pl.ObjectId);
-                    double totalTickLength = redLength + blueLength + redLength;
-                    double halfTickLength = totalTickLength / 2.0;
+                    // Tham số tick: đỏ + xanh + đỏ
+                    var blueLength = GetPolylineWidth(pl.ObjectId);
+                    var totalTickLength = RED_LENGTH + blueLength + RED_LENGTH;
+                    var halfTickLength = totalTickLength / 2.0;
 
                     // Vẽ tick tại các vị trí dọc theo polyline tạm
                     for (int i = 0; i <= tickCount; i++)
@@ -827,12 +603,12 @@ namespace HVAC_DUCT
                             Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0);
 
                             // Tính các điểm của tick
-                            Point3d tickStart = pointOnTempPl - normal * halfTickLength;
-                            Point3d redEnd1 = pointOnTempPl - normal * (halfTickLength - redLength);
-                            Point3d blueStart = pointOnTempPl - normal * (halfTickLength - redLength);
-                            Point3d blueEnd = pointOnTempPl + normal * (halfTickLength - redLength);
-                            Point3d redStart2 = pointOnTempPl + normal * (halfTickLength - redLength);
-                            Point3d tickEnd = pointOnTempPl + normal * halfTickLength;
+                            var tickStart = pointOnTempPl - normal * halfTickLength;
+                            var redEnd1 = pointOnTempPl - normal * (halfTickLength - RED_LENGTH);
+                            var blueStart = pointOnTempPl - normal * (halfTickLength - RED_LENGTH);
+                            var blueEnd = pointOnTempPl + normal * (halfTickLength - RED_LENGTH);
+                            var redStart2 = pointOnTempPl + normal * (halfTickLength - RED_LENGTH);
+                            var tickEnd = pointOnTempPl + normal * halfTickLength;
 
                             // Vẽ đoạn đỏ đầu tiên
                             wd.SubEntityTraits.Color = 1; // Đỏ
@@ -841,9 +617,6 @@ namespace HVAC_DUCT
                             // Vẽ đoạn xanh giữa
                             wd.SubEntityTraits.Color = 4; // Xanh sáng
                             wd.Geometry.WorldLine(blueStart, blueEnd);
-                            
-                            
-                            
 
                             // Vẽ đoạn đỏ cuối
                             wd.SubEntityTraits.Color = 1; // Đỏ
@@ -875,10 +648,17 @@ namespace HVAC_DUCT
         /// <summary>
         /// Class chứa các lệnh để bật/tắt FilletOverrule
         /// </summary>
-    public class FilletOverruleCmd
-    {
-        private static FilletOverrule _overrule;
-        private static double _blueWidth = 8.0;
+        public class FilletOverruleCmd
+        {
+            #region Constants
+            private const string APP_NAME = "HVAC_DUCT";
+            private const double DEFAULT_BLUE_WIDTH = 8.0;
+            #endregion
+
+            #region Private Fields
+            private static FilletOverrule _overrule;
+            private static double _blueWidth = DEFAULT_BLUE_WIDTH;
+            #endregion
 
         /// <summary>
         /// Khởi tạo overrule
@@ -891,15 +671,13 @@ namespace HVAC_DUCT
                 {
                     _overrule = new FilletOverrule();
                     Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)), _overrule, true);
-                    Overrule.AddOverrule(RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline2d)), _overrule, true);
+                    Overrule.AddOverrule(RXClass.GetClass(typeof(Polyline2d)), _overrule, true);
                     _overrule.SetCustomFilter();
                 }
             }
             catch (System.Exception ex)
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                ed.WriteMessage($"\nLỗi khởi tạo overrule: {ex.Message}");
+                Supply_duct.HandleException("InitializeOverrule", ex);
             }
         }
 
@@ -919,14 +697,40 @@ namespace HVAC_DUCT
             }
             catch (System.Exception ex)
             {
-                Document doc = Application.DocumentManager.MdiActiveDocument;
-                Editor ed = doc.Editor;
-                ed.WriteMessage($"\nLỗi cleanup overrule: {ex.Message}");
+                Supply_duct.HandleException("CleanupOverrule", ex);
             }
-        } // Độ dài đoạn xanh mặc định
+        }
 
-            /// <summary>
-            /// Lưu thông tin tick vào XData của polyline
+        /// <summary>
+        /// Đăng ký ứng dụng trong database
+        /// </summary>
+        /// <param name="db">Database</param>
+        private static void RegisterApplication(Database db)
+        {
+            try
+            {
+                using (var regTr = db.TransactionManager.StartTransaction())
+                {
+                    var regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
+                    if (!regAppTable.Has(APP_NAME))
+                    {
+                        regAppTable.UpgradeOpen();
+                        var regAppRecord = new RegAppTableRecord();
+                        regAppRecord.Name = APP_NAME;
+                        regAppTable.Add(regAppRecord);
+                        regTr.AddNewlyCreatedDBObject(regAppRecord, true);
+                    }
+                    regTr.Commit();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Supply_duct.HandleException("RegisterApplication", ex);
+            }
+        }
+
+        /// <summary>
+        /// Lưu thông tin tick vào XData của polyline
             /// </summary>
             /// <param name="pl">Polyline cần lưu</param>
             /// <param name="blueWidth">Width của tick</param>
@@ -956,11 +760,11 @@ namespace HVAC_DUCT
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
                     // Mở polyline để ghi XData
-                    Autodesk.AutoCAD.DatabaseServices.Polyline plForWrite = tr.GetObject(pl.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    var plForWrite = tr.GetObject(pl.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                     
                         // Tạo ResultBuffer với tên ứng dụng và width
                     ResultBuffer rb = new ResultBuffer();
-                        rb.Add(new TypedValue(1001, appName)); // Tên ứng dụng
+                        rb.Add(new TypedValue(1001, APP_NAME)); // Tên ứng dụng
                         rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
                     
                     // Thêm XData vào polyline
@@ -1040,7 +844,7 @@ namespace HVAC_DUCT
                         BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
 
                         // Tạo polyline
-                        Autodesk.AutoCAD.DatabaseServices.Polyline pl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+                        var pl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
                         pl.SetDatabaseDefaults();
                         pl.Color = Color.FromColorIndex(ColorMethod.ByAci, 4); // Màu xanh sáng
 
@@ -1235,11 +1039,11 @@ namespace HVAC_DUCT
                 bool isHVACDuct = false;
                 double width = 0;
 
-                foreach (TypedValue tv in rb)
+                foreach (var tv in rb)
                 {
                     if (tv.TypeCode == 1001) // Tên ứng dụng
                     {
-                        if (tv.Value.ToString() == "HVAC_DUCT")
+                        if (tv.Value.ToString() == APP_NAME)
                         {
                             isHVACDuct = true;
                         }
@@ -1320,10 +1124,10 @@ namespace HVAC_DUCT
                 Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
                 
                 // Tạo text hiển thị width
-                string widthText = $"{width:F0}\"∅";
+                var widthText = $"{width:F0}\"∅";
                 
                 // Vị trí text bên ngoài polyline
-                Point3d textPosition = endPoint + normal * 5.0; // Cách polyline 5 inch
+                var textPosition = endPoint + normal * (3.0 + width); // Cách polyline 5 inch
                 
                 // Tạo layer cho MText nếu chưa có
                 ObjectId layerId = CreateOrGetLayer("M-ANNO-TAG-DUCT", 50); // Màu 50 theo chuẩn
@@ -1411,7 +1215,7 @@ namespace HVAC_DUCT
 
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
-                    Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(per.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    var pl = tr.GetObject(per.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                     if (pl == null)
                     {
                         ed.WriteMessage("\nKhông thể load polyline!");
@@ -1501,21 +1305,7 @@ namespace HVAC_DUCT
                 ed.WriteMessage("\nĐang tìm polylines có tick trong database...");
 
                 // Đăng ký ứng dụng trước khi đọc XData
-                string appName = "HVAC_DUCT";
-                using (Transaction regTr = db.TransactionManager.StartTransaction())
-                {
-                    RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
-                    if (!regAppTable.Has(appName))
-                    {
-                        regAppTable.UpgradeOpen();
-                        RegAppTableRecord regAppRecord = new RegAppTableRecord();
-                        regAppRecord.Name = appName;
-                        regAppTable.Add(regAppRecord);
-                        regTr.AddNewlyCreatedDBObject(regAppRecord, true);
-                        ed.WriteMessage($"\nĐã đăng ký ứng dụng: {appName}");
-                    }
-                    regTr.Commit();
-                }
+                RegisterApplication(db);
 
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
@@ -1531,49 +1321,12 @@ namespace HVAC_DUCT
                             if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
                             {
                                 totalPolylines++;
-                                Autodesk.AutoCAD.DatabaseServices.Polyline pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                                var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                                 
                                 // Kiểm tra XData có chứa thông tin tick không
-                                if (pl.XData != null)
+                                var blueWidth = LoadWidthFromXData(pl);
+                                if (blueWidth > 0)
                                 {
-                                    ResultBuffer rb = pl.XData;
-                                    double blueWidth = 8.0; // Mặc định
-                                    bool isHVACDuct = false;
-                                    
-                                    ed.WriteMessage($"\nTìm thấy polyline Handle: {objId.Handle.Value} có XData");
-                                    
-                                    // Debug: Hiển thị tất cả XData
-                                    ed.WriteMessage($"\nXData chi tiết cho Handle {objId.Handle.Value}:");
-                                    foreach (TypedValue tv in rb)
-                                    {
-                                        ed.WriteMessage($"\n  TypeCode: {tv.TypeCode}, Value: {tv.Value}");
-                                    }
-                                    
-                                    // Kiểm tra tên ứng dụng và tìm width
-                                    foreach (TypedValue tv in rb)
-                                    {
-                                        if (tv.TypeCode == 1001) // Tên ứng dụng
-                                        {
-                                            if (tv.Value.ToString() == "HVAC_DUCT")
-                                            {
-                                                isHVACDuct = true;
-                                                ed.WriteMessage($"\nTìm thấy ứng dụng: {tv.Value}");
-                                            }
-                                        }
-                                        else if (tv.TypeCode == 1040) // Double - Width
-                                        {
-                                            blueWidth = (double)tv.Value;
-                                            ed.WriteMessage($"\nTìm thấy width: {blueWidth:F1}");
-                                        }
-                                    }
-                                    
-                                    // Chỉ load tick nếu là ứng dụng HVAC_DUCT
-                                    if (!isHVACDuct)
-                                    {
-                                        ed.WriteMessage($"\nBỏ qua polyline Handle: {objId.Handle.Value} - không phải HVAC_DUCT");
-                                        continue;
-                                    }
-                                    
                                     // Thêm vào danh sách hiển thị với width riêng
                                     FilletOverrule.AddAllowedPolylineWithWidth(objId, blueWidth);
                                     count++;
@@ -1581,7 +1334,7 @@ namespace HVAC_DUCT
                                 }
                                 else
                                 {
-                                    ed.WriteMessage($"\nPolyline Handle: {objId.Handle.Value} không có XData");
+                                    ed.WriteMessage($"\nPolyline Handle: {objId.Handle.Value} không có XData HVAC_DUCT");
                                 }
                             }
                         }
@@ -1613,10 +1366,17 @@ namespace HVAC_DUCT
         /// </summary>
         public class DuctDrawJig : Autodesk.AutoCAD.EditorInput.DrawJig
         {
+            #region Constants
+            private const double TICK_SPACING = 4.0;
+            private const double RED_LENGTH = 2.0;
+            #endregion
+
+            #region Private Fields
             private Autodesk.AutoCAD.DatabaseServices.Polyline _polyline;
             private double _blueWidth;
             private Point3d _currentPoint;
             private bool _hasPreviewPoint = false;
+            #endregion
 
             public bool HasPreviewPoint { get { return _hasPreviewPoint; } }
 
@@ -1734,7 +1494,7 @@ namespace HVAC_DUCT
 
                     // Tạo polyline fit với bo góc giống polyline tạm
                     FilletOverrule overrule = new FilletOverrule();
-                    Autodesk.AutoCAD.DatabaseServices.Polyline tempPl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+                    var tempPl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
                     
                     // Copy điểm vào polyline tạm
                     for (int i = 0; i < points.Count; i++)
@@ -1784,7 +1544,7 @@ namespace HVAC_DUCT
 
                     // Tạo polyline fit với bo góc giống polyline tạm
                     FilletOverrule overrule = new FilletOverrule();
-                    Autodesk.AutoCAD.DatabaseServices.Polyline tempPl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+                    var tempPl = new Autodesk.AutoCAD.DatabaseServices.Polyline();
                     
                     // Copy điểm vào polyline tạm
                     for (int i = 0; i < points.Count; i++)
@@ -1806,17 +1566,14 @@ namespace HVAC_DUCT
 
                     if (totalLength <= 0.0) return;
 
-                    // Khoảng cách giữa các tick (4 inch)
-                    double tickSpacing = 4.0;
-                    int tickCount = (int)Math.Round(totalLength / tickSpacing);
+                    // Số lượng tick
+                    var tickCount = (int)Math.Round(totalLength / TICK_SPACING);
                     if (tickCount < 1) tickCount = 1;
-                    double actualSpacing = totalLength / tickCount;
+                    var actualSpacing = totalLength / tickCount;
 
                     // Tham số tick
-                    double redLength = 2.0;
-                    double blueLength = _blueWidth;
-                    double totalTickLength = redLength + blueLength + redLength;
-                    double halfTickLength = totalTickLength / 2.0;
+                    var totalTickLength = RED_LENGTH + _blueWidth + RED_LENGTH;
+                    var halfTickLength = totalTickLength / 2.0;
 
                     // Vẽ tick preview trên polyline fit
                     for (int i = 0; i <= tickCount; i++)
@@ -1869,12 +1626,12 @@ namespace HVAC_DUCT
                         Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0);
 
                         // Tính các điểm của tick
-                        Point3d tickStart = pointOnPl - normal * halfTickLength;
-                        Point3d redEnd1 = pointOnPl - normal * (halfTickLength - redLength);
-                        Point3d blueStart = pointOnPl - normal * (halfTickLength - redLength);
-                        Point3d blueEnd = pointOnPl + normal * (halfTickLength - redLength);
-                        Point3d redStart2 = pointOnPl + normal * (halfTickLength - redLength);
-                        Point3d tickEnd = pointOnPl + normal * halfTickLength;
+                        var tickStart = pointOnPl - normal * halfTickLength;
+                        var redEnd1 = pointOnPl - normal * (halfTickLength - RED_LENGTH);
+                        var blueStart = pointOnPl - normal * (halfTickLength - RED_LENGTH);
+                        var blueEnd = pointOnPl + normal * (halfTickLength - RED_LENGTH);
+                        var redStart2 = pointOnPl + normal * (halfTickLength - RED_LENGTH);
+                        var tickEnd = pointOnPl + normal * halfTickLength;
 
                         // Vẽ tick
                         wd.SubEntityTraits.Color = 1; // Đỏ
