@@ -11,7 +11,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace TAN2025_HVAC_DUCT
+namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
 {
     /// <summary>
     /// Main application class for HVAC Duct system
@@ -134,6 +134,16 @@ namespace TAN2025_HVAC_DUCT
             {
                 _allowedPolylines.Add(polylineId);
                 _polylineWidths[polylineId] = width;
+            }
+
+        /// <summary>
+        /// Xóa polyline khỏi danh sách hiển thị tick
+        /// </summary>
+        /// <param name="polylineId">ObjectId của polyline</param>
+        public static void RemoveAllowedPolyline(ObjectId polylineId)
+        {
+            _allowedPolylines.Remove(polylineId);
+            _polylineWidths.Remove(polylineId);
         }
 
         /// <summary>
@@ -651,7 +661,7 @@ namespace TAN2025_HVAC_DUCT
         public class FilletOverruleCmd
         {
             #region Constants
-            private const string APP_NAME = "HVAC_DUCT";
+            private const string APP_NAME = "HVAC_DUCT_SUPPLY_AIR";
             private const double DEFAULT_BLUE_WIDTH = 8.0;
             #endregion
 
@@ -730,11 +740,12 @@ namespace TAN2025_HVAC_DUCT
         }
 
         /// <summary>
-        /// Lưu thông tin tick vào XData của polyline
-            /// </summary>
-            /// <param name="pl">Polyline cần lưu</param>
-            /// <param name="blueWidth">Width của tick</param>
-        private static void SaveTickInfoToDatabase(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double blueWidth)
+        /// Lưu thông tin tick và MText ObjectId vào XData của polyline
+        /// </summary>
+        /// <param name="pl">Polyline cần lưu</param>
+        /// <param name="blueWidth">Width của tick</param>
+        /// <param name="mtextId">ObjectId của MText (có thể null)</param>
+        private static void SaveTickInfoToDatabase(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double blueWidth, ObjectId? mtextId = null)
         {
             try
             {
@@ -742,7 +753,7 @@ namespace TAN2025_HVAC_DUCT
                 Database db = doc.Database;
                 
                 // Đăng ký ứng dụng trước khi lưu XData
-                string appName = "HVAC_DUCT";
+                string appName = "HVAC_DUCT_SUPPLY_AIR";
                 using (Transaction regTr = db.TransactionManager.StartTransaction())
                 {
                     RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
@@ -762,10 +773,15 @@ namespace TAN2025_HVAC_DUCT
                     // Mở polyline để ghi XData
                     var plForWrite = tr.GetObject(pl.ObjectId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                     
-                        // Tạo ResultBuffer với tên ứng dụng và width
+                    // Tạo ResultBuffer với tên ứng dụng, width và MText ObjectId
                     ResultBuffer rb = new ResultBuffer();
-                        rb.Add(new TypedValue(1001, APP_NAME)); // Tên ứng dụng
-                        rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
+                    rb.Add(new TypedValue(1001, APP_NAME)); // Tên ứng dụng
+                    rb.Add(new TypedValue(1040, blueWidth)); // Width as Double
+                    
+                    if (mtextId.HasValue && mtextId.Value.IsValid)
+                    {
+                        rb.Add(new TypedValue(1005, mtextId.Value.Handle.Value)); // MText Handle
+                    }
                     
                     // Thêm XData vào polyline
                     plForWrite.XData = rb;
@@ -775,7 +791,14 @@ namespace TAN2025_HVAC_DUCT
                     // Debug message
                     Document doc2 = Application.DocumentManager.MdiActiveDocument;
                     Editor ed2 = doc2.Editor;
-                    ed2.WriteMessage($"\nĐã lưu width {blueWidth:F1} vào XData của Handle: {pl.ObjectId.Handle.Value}");
+                    if (mtextId.HasValue)
+                    {
+                        ed2.WriteMessage($"\nĐã lưu width {blueWidth:F1} và MText Handle {mtextId.Value.Handle.Value} vào XData của Handle: {pl.ObjectId.Handle.Value}");
+                    }
+                    else
+                    {
+                        ed2.WriteMessage($"\nĐã lưu width {blueWidth:F1} vào XData của Handle: {pl.ObjectId.Handle.Value}");
+                    }
                 }
             }
             catch (System.Exception ex)
@@ -791,7 +814,7 @@ namespace TAN2025_HVAC_DUCT
             /// <summary>
             /// Lệnh vẽ duct với tick: nhập W -> chọn điểm đầu tiên -> vẽ polyline với tick overrule
             /// </summary>
-            [CommandMethod("TAN25_TANDUCTGOOD")]
+            [CommandMethod("TAN25_HVAC_DUCT_SUPPLY_AIR")]
             public static void TanDuctGood()
             {
                 Document doc = Application.DocumentManager.MdiActiveDocument;
@@ -934,7 +957,7 @@ namespace TAN2025_HVAC_DUCT
                 Database db = doc.Database;
 
                 // Đăng ký ứng dụng nếu chưa có
-                string appName = "HVAC_DUCT";
+                string appName = "HVAC_DUCT_SUPPLY_AIR";
                 using (Transaction regTr = db.TransactionManager.StartTransaction())
                 {
                     RegAppTable regAppTable = regTr.GetObject(db.RegAppTableId, OpenMode.ForRead) as RegAppTable;
@@ -949,10 +972,18 @@ namespace TAN2025_HVAC_DUCT
                     regTr.Commit();
                 }
 
-                // Tạo ResultBuffer với tên ứng dụng và width mới
+                // Lấy MText ObjectId hiện có từ XData
+                ObjectId? existingMTextId = LoadMTextIdFromXData(pl);
+
+                // Tạo ResultBuffer với tên ứng dụng, width mới và MText ObjectId (nếu có)
                 ResultBuffer rb = new ResultBuffer();
-                rb.Add(new TypedValue(1001, "HVAC_DUCT")); // Tên ứng dụng
+                rb.Add(new TypedValue(1001, "HVAC_DUCT_SUPPLY_AIR")); // Tên ứng dụng
                 rb.Add(new TypedValue(1040, newWidth)); // Width as Double
+                
+                if (existingMTextId.HasValue && existingMTextId.Value.IsValid)
+                {
+                    rb.Add(new TypedValue(1005, existingMTextId.Value.Handle.Value)); // MText Handle
+                }
 
                 // Cập nhật XData
                 pl.XData = rb;
@@ -1021,6 +1052,53 @@ namespace TAN2025_HVAC_DUCT
                 Document doc = Application.DocumentManager.MdiActiveDocument;
                 Editor ed = doc.Editor;
                 ed.WriteMessage($"\nLỗi xóa MText: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Load MText ObjectId từ XData của polyline
+        /// </summary>
+        /// <param name="pl">Polyline cần load MText ObjectId</param>
+        /// <returns>MText ObjectId hoặc null nếu không tìm thấy</returns>
+        private static ObjectId? LoadMTextIdFromXData(Autodesk.AutoCAD.DatabaseServices.Polyline pl)
+        {
+            try
+            {
+                if (pl.XData == null) return null;
+
+                ResultBuffer rb = pl.XData;
+                bool isHVACDuct = false;
+                ObjectId? mtextId = null;
+
+                foreach (var tv in rb)
+                {
+                    if (tv.TypeCode == 1001) // Tên ứng dụng
+                    {
+                        if (tv.Value.ToString() == APP_NAME)
+                        {
+                            isHVACDuct = true;
+                        }
+                    }
+                    else if (tv.TypeCode == 1005) // Handle - MText ObjectId
+                    {
+                        try
+                        {
+                            long handleValue = Convert.ToInt64(tv.Value);
+                            mtextId = pl.Database.GetObjectId(false, new Handle(handleValue), 0);
+                        }
+                        catch
+                        {
+                            // Handle không hợp lệ
+                        }
+                    }
+                }
+
+                // Chỉ trả về MText ObjectId nếu là ứng dụng HVAC_DUCT
+                return isHVACDuct ? mtextId : null;
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -1097,6 +1175,84 @@ namespace TAN2025_HVAC_DUCT
         }
 
         /// <summary>
+        /// Cập nhật MText trực tiếp bằng ObjectId từ XData
+        /// </summary>
+        /// <param name="pl">Polyline cần cập nhật MText</param>
+        /// <param name="newWidth">Width mới</param>
+        private static void UpdateMTextForPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, double newWidth)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                // Lấy MText ObjectId từ XData
+                ObjectId? mtextId = LoadMTextIdFromXData(pl);
+                
+                if (!mtextId.HasValue || !mtextId.Value.IsValid)
+                {
+                    ed.WriteMessage($"\nKhông tìm thấy MText ObjectId trong XData của polyline Handle: {pl.ObjectId.Handle.Value}");
+                    ed.WriteMessage($"\nVui lòng chạy lại lệnh TAN25_TANDUCTGOOD để tạo MText mới!");
+                    return;
+                }
+
+                // Lấy điểm cuối của polyline
+                Point3d endPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 1);
+                
+                // Tính vector pháp tuyến tại điểm cuối
+                Vector3d tangent = GetTangentAtEnd(pl);
+                Vector3d normal = new Vector3d(-tangent.Y, tangent.X, 0.0).GetNormal();
+                
+                // Tạo text hiển thị width mới
+                var widthText = $"{newWidth:F0}\"∅";
+                
+                // Vị trí text bên ngoài polyline
+                var textPosition = endPoint + normal * (3.0 + newWidth);
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    try
+                    {
+                        // Mở MText để cập nhật
+                        MText mtext = tr.GetObject(mtextId.Value, OpenMode.ForWrite) as MText;
+                        if (mtext != null)
+                        {
+                            mtext.Contents = widthText;
+                            mtext.Location = textPosition;
+                            ed.WriteMessage($"\nĐã cập nhật MText trực tiếp với width mới: {newWidth:F1}");
+                        }
+                        else
+                        {
+                            ed.WriteMessage($"\nKhông thể mở MText với ObjectId: {mtextId.Value.Handle.Value}");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\nLỗi cập nhật MText: {ex.Message}");
+                        ed.WriteMessage($"\nMText có thể đã bị xóa, sẽ tạo mới...");
+                        
+                        // Tạo MText mới nếu không tìm thấy
+                        CreateMTextForPolyline(pl);
+                        return;
+                    }
+
+                    tr.Commit();
+                }
+                
+                // Refresh màn hình để hiển thị MText
+                ed.Regen();
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi cập nhật MText: {ex.Message}");
+            }
+        }
+
+
+        /// <summary>
         /// Tạo MText cho polyline sau khi kết thúc lệnh vẽ
         /// </summary>
         /// <param name="pl">Polyline đã vẽ</param>
@@ -1154,6 +1310,9 @@ namespace TAN2025_HVAC_DUCT
                     tr.AddNewlyCreatedDBObject(mtext, true);
                     
                     tr.Commit();
+                    
+                    // Lưu MText ObjectId vào XData của polyline
+                    SaveTickInfoToDatabase(pl, width, mtext.ObjectId);
                 }
                 
                 // Refresh màn hình để hiển thị MText
@@ -1193,7 +1352,7 @@ namespace TAN2025_HVAC_DUCT
         /// <summary>
         /// Lệnh edit width của polyline và tự động load lại tick + MText
         /// </summary>
-        [CommandMethod("TAN25_EDITWIDTH")]
+        [CommandMethod("TAN25_HVAC_DUCT_SUPPLY_AIR_EDIT_WIDTH")]
         public static void EditWidthAndReload()
         {
             try
@@ -1255,11 +1414,8 @@ namespace TAN2025_HVAC_DUCT
 
                     ed.WriteMessage($"\nĐã cập nhật width từ {currentWidth:F1} thành {newWidth:F1}");
 
-                    // Xóa MText cũ (nếu có)
-                    DeleteMTextForPolyline(pl);
-
-                    // Tạo MText mới
-                    CreateMTextForPolyline(pl);
+                    // Cập nhật MText trực tiếp bằng ObjectId từ XData
+                    UpdateMTextForPolyline(pl, newWidth);
 
                     // Load lại tick
                     LoadTempTicks();
@@ -1279,10 +1435,218 @@ namespace TAN2025_HVAC_DUCT
             }
         }
 
+
+
+
+
+
+
+        /// <summary>
+        /// Lệnh tự động load tick sau khi break polyline
+        /// </summary>
+        [CommandMethod("TAN25_HVAC_DUC_AUTOBREAK")]
+        public static void AutoBreakWithTick()
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                ed.WriteMessage("\n=== BẮT ĐẦU LỆNH TAN25_AUTOBREAK ===");
+                ed.WriteMessage("\nHướng dẫn:");
+                ed.WriteMessage("\n1. Chọn polyline cần break");
+                ed.WriteMessage("\n2. Chọn điểm break thứ nhất");
+                ed.WriteMessage("\n3. Chọn điểm break thứ hai");
+                ed.WriteMessage("\n4. Hệ thống sẽ tự động load tick cho 2 polyline mới");
+
+                // Chọn polyline cần break
+                PromptEntityOptions peo = new PromptEntityOptions("\nChọn polyline cần break: ");
+                peo.SetRejectMessage("\nVui lòng chọn polyline!");
+                peo.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), true);
+
+                PromptEntityResult per = ed.GetEntity(peo);
+                if (per.Status != PromptStatus.OK) return;
+
+                double width = 0;
+                ResultBuffer originalXData = null;
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var originalPl = tr.GetObject(per.ObjectId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (originalPl == null)
+                    {
+                        ed.WriteMessage("\nKhông thể load polyline!");
+                        return;
+                    }
+
+                    // Kiểm tra XData
+                    width = LoadWidthFromXData(originalPl);
+                    if (width <= 0)
+                    {
+                        ed.WriteMessage("\nPolyline này không có XData HVAC_DUCT_SUPPLY_AIR!");
+                        return;
+                    }
+
+                    ed.WriteMessage($"\nWidth từ polyline gốc: {width:F1}");
+
+                    // Lưu thông tin XData để sử dụng sau
+                    originalXData = originalPl.XData;
+
+                    // Xóa tick ở điểm đầu và cuối trước khi break
+                    ed.WriteMessage("\nĐang xóa tick ở điểm đầu và cuối...");
+                    
+                    // Xóa MText của polyline gốc
+                    DeleteMTextForPolyline(originalPl);
+                    
+                    // Xóa tick khỏi danh sách hiển thị
+                    FilletOverrule.RemoveAllowedPolyline(per.ObjectId);
+
+                    tr.Commit();
+                }
+
+                // Chọn điểm break thứ nhất
+                PromptPointOptions ppo1 = new PromptPointOptions("\nChọn điểm break thứ nhất: ");
+                PromptPointResult ppr1 = ed.GetPoint(ppo1);
+                if (ppr1.Status != PromptStatus.OK) return;
+
+                Point3d breakPoint1 = ppr1.Value;
+
+                // Chọn điểm break thứ hai
+                PromptPointOptions ppo2 = new PromptPointOptions("\nChọn điểm break thứ hai: ");
+                PromptPointResult ppr2 = ed.GetPoint(ppo2);
+                if (ppr2.Status != PromptStatus.OK) return;
+
+                Point3d breakPoint2 = ppr2.Value;
+
+                // Thực hiện break polyline
+                ed.WriteMessage("\nĐang thực hiện break polyline...");
+                
+                // Sử dụng lệnh BREAK của AutoCAD
+                ed.Command("BREAK", per.ObjectId, breakPoint1, breakPoint2);
+
+                // Đợi một chút để AutoCAD hoàn thành lệnh break
+                System.Threading.Thread.Sleep(500);
+
+                // Tìm và xử lý 2 polyline mới
+                ProcessNewPolylinesAfterBreak(per.ObjectId, width, originalXData);
+                LoadTempTicks();
+
+                ed.WriteMessage("\n=== KẾT THÚC LỆNH TAN25_AUTOBREAK ===");
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi auto break: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Xử lý 2 polyline mới sau khi break
+        /// </summary>
+        private static void ProcessNewPolylinesAfterBreak(ObjectId originalObjectId, double originalWidth, ResultBuffer originalXData)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                ed.WriteMessage("\nĐang tìm polyline mới sau break...");
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    // Tìm tất cả polyline trong ModelSpace
+                    var allPolylines = new List<Autodesk.AutoCAD.DatabaseServices.Polyline>();
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null)
+                            {
+                                allPolylines.Add(pl);
+                            }
+                        }
+                    }
+
+                    ed.WriteMessage($"\nTổng số polyline trong drawing: {allPolylines.Count}");
+
+                    // Tìm polyline không có XData (có thể là polyline mới từ break)
+                    var newPolylines = new List<Autodesk.AutoCAD.DatabaseServices.Polyline>();
+                    
+                    foreach (var pl in allPolylines)
+                    {
+                        double currentWidth = LoadWidthFromXData(pl);
+                        if (currentWidth <= 0) // Không có XData
+                        {
+                            newPolylines.Add(pl);
+                            ed.WriteMessage($"\nTìm thấy polyline không có XData: Handle {pl.ObjectId.Handle.Value}");
+                        }
+                    }
+
+                    ed.WriteMessage($"\nTìm thấy {newPolylines.Count} polyline không có XData");
+
+                    // Xử lý tất cả polyline không có XData
+                    int processedCount = 0;
+                    foreach (var newPl in newPolylines)
+                    {
+                        try
+                        {
+                            // Tạo XData mới cho polyline này (không copy từ polyline gốc)
+                            newPl.UpgradeOpen();
+                            
+                            // Tạo XData mới với width từ polyline gốc
+                            SaveTickInfoToDatabase(newPl, originalWidth);
+                            
+                            // Tạo MText mới cho polyline này
+                            CreateMTextForPolyline(newPl);
+                            
+                            // Thêm vào danh sách hiển thị tick
+                            FilletOverrule.AddAllowedPolylineWithWidth(newPl.ObjectId, originalWidth);
+                            
+                            processedCount++;
+                            ed.WriteMessage($"\nĐã tạo XData mới cho polyline Handle: {newPl.ObjectId.Handle.Value}");
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ed.WriteMessage($"\nLỗi xử lý polyline Handle {newPl.ObjectId.Handle.Value}: {ex.Message}");
+                        }
+                    }
+
+                    tr.Commit();
+                    
+                    if (processedCount > 0)
+                    {
+                        ed.WriteMessage($"\nĐã xử lý {processedCount} polyline mới!");
+                        
+                        // Load lại tick
+                        LoadTempTicks();
+                        ed.WriteMessage("\nĐã load lại tick!");
+                    }
+                    else
+                    {
+                        ed.WriteMessage("\nKhông tìm thấy polyline mới để xử lý!");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi xử lý polyline mới: {ex.Message}");
+            }
+        }
+
+
         /// <summary>
         /// Lệnh load tick từ database
         /// </summary>
-        [CommandMethod("TAN25_LOADTEMP")]
+        [CommandMethod("TAN25_HVAC_DUCT_SUPPLY_AIR_LOAD_TEMP")]
         public static void LoadTempTicks()
         {
             Document doc = Application.DocumentManager.MdiActiveDocument;
