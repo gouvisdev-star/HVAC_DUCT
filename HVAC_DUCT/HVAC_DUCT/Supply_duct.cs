@@ -7,6 +7,7 @@ using Autodesk.AutoCAD.GraphicsInterface;
 using Autodesk.AutoCAD.Runtime;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -1544,6 +1545,105 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
         }
 
         /// <summary>
+        /// Xử lý 2 polyline mới sau khi break với width giống block
+        /// </summary>
+        private static void ProcessNewPolylinesAfterBreakWithBlockWidth(ObjectId originalObjectId, double blockWidth, ResultBuffer originalXData, Editor ed)
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+
+                ed.WriteMessage("\nĐang tìm polyline mới sau break...");
+
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    // Tìm tất cả polyline trong ModelSpace
+                    var allPolylines = new List<Autodesk.AutoCAD.DatabaseServices.Polyline>();
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null)
+                            {
+                                allPolylines.Add(pl);
+                            }
+                        }
+                    }
+
+                    ed.WriteMessage($"\nTổng số polyline trong drawing: {allPolylines.Count}");
+
+                    // Tìm polyline không có XData (có thể là polyline mới từ break)
+                    var newPolylines = new List<Autodesk.AutoCAD.DatabaseServices.Polyline>();
+                    
+                    foreach (var pl in allPolylines)
+                    {
+                        double currentWidth = LoadWidthFromXData(pl);
+                        if (currentWidth <= 0) // Không có XData
+                        {
+                            newPolylines.Add(pl);
+                            ed.WriteMessage($"\nTìm thấy polyline không có XData: Handle {pl.ObjectId.Handle.Value}");
+                        }
+                    }
+
+                    ed.WriteMessage($"\nTìm thấy {newPolylines.Count} polyline không có XData");
+
+                    // Xử lý tất cả polyline không có XData với width giống block
+                    int processedCount = 0;
+                    foreach (var newPl in newPolylines)
+                    {
+                        try
+                        {
+                            // Tạo XData mới cho polyline này với width giống block
+                            newPl.UpgradeOpen();
+                            
+                            // Tạo XData mới với width từ block
+                            SaveTickInfoToDatabase(newPl, blockWidth);
+                            
+                            // Tạo MText mới cho polyline này
+                            CreateMTextForPolyline(newPl);
+                            
+                            // Thêm vào danh sách hiển thị tick với width giống block
+                            FilletOverrule.AddAllowedPolylineWithWidth(newPl.ObjectId, blockWidth);
+                            
+                            processedCount++;
+                            ed.WriteMessage($"\nĐã tạo XData mới cho polyline Handle: {newPl.ObjectId.Handle.Value} với width: {blockWidth:F1}");
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ed.WriteMessage($"\nLỗi xử lý polyline Handle {newPl.ObjectId.Handle.Value}: {ex.Message}");
+                        }
+                    }
+
+                    tr.Commit();
+                    
+                    if (processedCount > 0)
+                    {
+                        ed.WriteMessage($"\nĐã xử lý {processedCount} polyline mới với width giống block!");
+                        
+                        // Load lại tick
+                        LoadTempTicks();
+                        ed.WriteMessage("\nĐã load lại tick!");
+                    }
+                    else
+                    {
+                        ed.WriteMessage("\nKhông tìm thấy polyline mới để xử lý!");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed2 = doc.Editor;
+                ed2.WriteMessage($"\nLỗi xử lý polyline mới: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Xử lý 2 polyline mới sau khi break
         /// </summary>
         private static void ProcessNewPolylinesAfterBreak(ObjectId originalObjectId, double originalWidth, ResultBuffer originalXData)
@@ -1643,6 +1743,930 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
             }
         }
 
+
+        /// <summary>
+        /// Lệnh thêm block GE_Y_CONN vào polyline
+        /// </summary>
+        [CommandMethod("TAN25_HVAC_DUCT_ADD_Y_CONN")]
+        public static void AddYConnBlock()
+        {
+            try
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                Editor ed = doc.Editor;
+
+                ed.WriteMessage("\n=== BẮT ĐẦU LỆNH TAN25_HVAC_DUCT_ADD_Y_CONN ===");
+                ed.WriteMessage("\nHướng dẫn:");
+                ed.WriteMessage("\n1. Click chọn điểm trên polyline để đặt Y-Connector");
+                ed.WriteMessage("\n2. Hệ thống sẽ tự động tìm polyline và break tại vị trí đó");
+
+                // Chọn điểm trên polyline (tự động tìm polyline)
+                PromptPointOptions ppo = new PromptPointOptions("\nClick chọn điểm trên polyline để đặt Y-Connector: ");
+                PromptPointResult ppr = ed.GetPoint(ppo);
+                if (ppr.Status != PromptStatus.OK) return;
+
+                Point3d userPoint = ppr.Value;
+                
+                // Tìm polyline gần nhất với điểm chọn
+                ObjectId plId = FindNearestPolylineWithXData(userPoint, db, ed);
+                if (plId.IsNull)
+                {
+                    ed.WriteMessage("\nKhông tìm thấy polyline có XData HVAC_DUCT gần điểm chọn!");
+                    return;
+                }
+                
+                // Kiểm tra XData của polyline và tìm điểm chính xác
+                double width = 0;
+                Point3d insertPoint = userPoint; // Default to user point
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var pl = tr.GetObject(plId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (pl == null)
+                    {
+                        ed.WriteMessage("\nKhông thể load polyline!");
+                        return;
+                    }
+
+                    // Tìm điểm chính xác trên polyline gần nhất với điểm user chọn
+                    insertPoint = GetClosestPointOnPolyline(pl, userPoint);
+                    ed.WriteMessage($"\nĐiểm user chọn: ({userPoint.X:F2}, {userPoint.Y:F2})");
+                    ed.WriteMessage($"\nĐiểm chính xác trên polyline: ({insertPoint.X:F2}, {insertPoint.Y:F2})");
+
+                    width = LoadWidthFromXData(pl);
+                    if (width <= 0)
+                    {
+                        ed.WriteMessage("\nPolyline này không có XData HVAC_DUCT_SUPPLY_AIR!");
+                        return;
+                    }
+
+                    ed.WriteMessage($"\nWidth từ polyline: {width:F1}");
+
+                    // Load block GE_Y_CONN từ file
+                    ed.WriteMessage("\nĐang load block GE_Y_CONN...");
+                    ObjectId blockId = LoadYConnBlock(db, width, ed);
+                    if (blockId.IsNull)
+                    {
+                        ed.WriteMessage("\nKhông thể load block GE_Y_CONN!");
+                        return;
+                    }
+                    ed.WriteMessage($"\nĐã load block GE_Y_CONN thành công! Handle: {blockId.Handle.Value}");
+
+                    // Chèn block vào điểm đã chọn
+                    ed.WriteMessage("\nĐang chèn block vào ModelSpace...");
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
+                    BlockReference blockRef = new BlockReference(insertPoint, blockId);
+                    blockRef.SetDatabaseDefaults();
+                    blockRef.Color = Color.FromColorIndex(ColorMethod.ByAci, 4); // Màu xanh sáng
+                    
+                    // Tính góc quay dựa trên hướng của polyline tại điểm chèn
+                    double rotation = GetPolylineRotationAtPoint(pl, insertPoint);
+                    blockRef.Rotation = rotation;
+                    
+                        // Tính 2 điểm kết nối của block (đầu và cuối)
+                        Vector3d direction = new Vector3d(Math.Cos(rotation), Math.Sin(rotation), 0);
+                        double blockLength = width * 0.6; // Chiều dài block dựa trên width (tăng lên)
+                        Point3d blockStart = insertPoint - direction * blockLength;
+                        Point3d blockEnd = insertPoint + direction * blockLength;
+                        
+                        // Tìm điểm kết nối chính xác trên polyline
+                        Point3d connectionPoint1 = GetClosestPointOnPolyline(pl, blockStart);
+                        Point3d connectionPoint2 = GetClosestPointOnPolyline(pl, blockEnd);
+                        
+                        // Đảm bảo 2 điểm kết nối không trùng nhau
+                        if (connectionPoint1.DistanceTo(connectionPoint2) < 0.1)
+                        {
+                            // Nếu 2 điểm quá gần, tạo 2 điểm cách nhau
+                            Vector3d perpDirection = new Vector3d(-direction.Y, direction.X, 0);
+                            connectionPoint1 = insertPoint - perpDirection * (width * 0.3);
+                            connectionPoint2 = insertPoint + perpDirection * (width * 0.3);
+                        }
+                    
+                    ed.WriteMessage($"\nĐiểm kết nối 1: ({connectionPoint1.X:F2}, {connectionPoint1.Y:F2})");
+                    ed.WriteMessage($"\nĐiểm kết nối 2: ({connectionPoint2.X:F2}, {connectionPoint2.Y:F2})");
+                    
+                    ed.WriteMessage($"\nBlock sẽ được chèn tại: ({insertPoint.X:F2}, {insertPoint.Y:F2}) với góc {rotation * 180 / Math.PI:F1}°");
+                    ed.WriteMessage($"\nĐiểm đầu block: ({blockStart.X:F2}, {blockStart.Y:F2})");
+                    ed.WriteMessage($"\nĐiểm cuối block: ({blockEnd.X:F2}, {blockEnd.Y:F2})");
+
+                    btr.AppendEntity(blockRef);
+                    tr.AddNewlyCreatedDBObject(blockRef, true);
+                    
+                    ed.WriteMessage($"\nBlock đã được thêm vào ModelSpace! Handle: {blockRef.ObjectId.Handle.Value}");
+
+                    // Break polyline tại vị trí chèn block
+                    ed.WriteMessage("\nĐang break polyline tại vị trí block...");
+                    
+                    // Lưu ObjectId trước khi break
+                    ObjectId originalPlId = pl.ObjectId;
+                    
+                    tr.Commit(); // Commit transaction trước khi break
+                    
+                    // Break polyline tại 2 điểm kết nối của block
+                    BreakPolylineAtBlockPoints(originalPlId, connectionPoint1, connectionPoint2, width, ed);
+
+                    ed.WriteMessage($"\nĐã thêm Y-Connector và break polyline thành công tại điểm ({insertPoint.X:F2}, {insertPoint.Y:F2}) với góc {rotation * 180 / Math.PI:F1}°");
+                }
+
+                ed.WriteMessage("\n=== KẾT THÚC LỆNH TAN25_HVAC_DUCT_ADD_Y_CONN ===");
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi thêm Y-Connector: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Load block GE_Y_CONN từ file
+        /// </summary>
+        private static ObjectId LoadYConnBlock(Database db, double width, Editor ed)
+        {
+            try
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    
+                    // Kiểm tra block đã tồn tại chưa
+                    if (bt.Has("GE_Y_CONN"))
+                    {
+                        return bt["GE_Y_CONN"];
+                    }
+
+                    // Đường dẫn file block (có thể thay đổi theo nhu cầu)
+                    string blockFilePath = GetBlockFilePath();
+                    ed.WriteMessage($"\nĐang tìm file block tại: {blockFilePath}");
+                    
+                    if (string.IsNullOrEmpty(blockFilePath) || !System.IO.File.Exists(blockFilePath))
+                    {
+                        ed.WriteMessage("\nKhông tìm thấy file block, sẽ tạo block mặc định...");
+                        // Nếu không tìm thấy file block, tạo block mặc định
+                        return CreateDefaultYConnBlock(db, width, tr, ed);
+                    }
+                    
+                    ed.WriteMessage($"\nTìm thấy file block: {blockFilePath}");
+
+                    // Load block từ file
+                    Database sourceDb = new Database(false, true);
+                    try
+                    {
+                        sourceDb.ReadDwgFile(blockFilePath, FileShare.Read, true, "");
+                        
+                        using (Transaction sourceTr = sourceDb.TransactionManager.StartTransaction())
+                        {
+                            BlockTable sourceBt = sourceTr.GetObject(sourceDb.BlockTableId, OpenMode.ForRead) as BlockTable;
+                            
+                            if (sourceBt.Has("GE_Y_CONN"))
+                            {
+                                // Copy block từ file nguồn
+                                ObjectId sourceBlockId = sourceBt["GE_Y_CONN"];
+                                BlockTableRecord sourceBtr = sourceTr.GetObject(sourceBlockId, OpenMode.ForRead) as BlockTableRecord;
+                                
+                                // Tạo block mới trong database hiện tại
+                                BlockTableRecord newBtr = new BlockTableRecord();
+                                newBtr.Name = "GE_Y_CONN";
+                                newBtr.Origin = sourceBtr.Origin;
+                                
+                                // Copy các entity từ block gốc
+                                foreach (ObjectId entityId in sourceBtr)
+                                {
+                                    Entity entity = sourceTr.GetObject(entityId, OpenMode.ForRead) as Entity;
+                                    if (entity != null)
+                                    {
+                                        Entity clonedEntity = entity.Clone() as Entity;
+                                        if (clonedEntity != null)
+                                        {
+                                            clonedEntity.SetDatabaseDefaults();
+                                            newBtr.AppendEntity(clonedEntity);
+                                        }
+                                    }
+                                }
+                                
+                                // Thêm block vào BlockTable
+                                bt.UpgradeOpen();
+                                ObjectId blockId = bt.Add(newBtr);
+                                tr.AddNewlyCreatedDBObject(newBtr, true);
+                                
+                                sourceTr.Commit();
+                                tr.Commit();
+                                
+                                return blockId;
+                            }
+                            else
+                            {
+                                sourceTr.Commit();
+                                // Nếu không tìm thấy block trong file, tạo block mặc định
+                                return CreateDefaultYConnBlock(db, width, tr, ed);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        sourceDb.Dispose();
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor editor = doc.Editor;
+                editor.WriteMessage($"\nLỗi load block GE_Y_CONN từ file: {ex.Message}");
+                return ObjectId.Null;
+            }
+        }
+
+        /// <summary>
+        /// Lấy đường dẫn file block
+        /// </summary>
+        private static string GetBlockFilePath()
+        {
+            try
+            {
+                // Đường dẫn file block cụ thể
+                string[] possiblePaths = {
+                    @"D:\Blocks\Mechanical\GE_Y_CONN.dwg",  // Đường dẫn chính
+                    @"C:\HVAC_Blocks\GE_Y_CONN.dwg",
+                    @"D:\HVAC_Blocks\GE_Y_CONN.dwg",
+                    @"C:\Program Files\HVAC_DUCT\Blocks\GE_Y_CONN.dwg",
+                    System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Blocks", "GE_Y_CONN.dwg"),
+                    System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "GE_Y_CONN.dwg")
+                };
+
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor editor = doc.Editor;
+                editor.WriteMessage("\nĐang tìm file block trong các đường dẫn:");
+                
+                foreach (string path in possiblePaths)
+                {
+                    editor.WriteMessage($"\n- Kiểm tra: {path}");
+                    if (System.IO.File.Exists(path))
+                    {
+                        editor.WriteMessage($"\n✓ Tìm thấy file: {path}");
+                        return path;
+                    }
+                    else
+                    {
+                        editor.WriteMessage($"\n✗ Không tìm thấy: {path}");
+                    }
+                }
+
+                editor.WriteMessage("\nKhông tìm thấy file block nào!");
+                return string.Empty;
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor editor = doc.Editor;
+                editor.WriteMessage($"\nLỗi khi tìm file block: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Tạo block GE_Y_CONN mặc định (fallback)
+        /// </summary>
+        private static ObjectId CreateDefaultYConnBlock(Database db, double width, Transaction tr, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nĐang tạo block GE_Y_CONN mặc định...");
+                BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                
+                // Tạo block mới
+                BlockTableRecord btr = new BlockTableRecord();
+                btr.Name = "GE_Y_CONN";
+                btr.Origin = Point3d.Origin;
+
+                // Tạo layer cho block
+                ObjectId layerId = CreateOrGetLayer("M-DUCT-FITTING", 4);
+
+                // Tạo hình dạng Y-Connector
+                double scale = width / 12.0; // Scale dựa trên width
+                double size = 6.0 * scale; // Kích thước cơ bản
+
+                // Vẽ 3 đường thẳng tạo hình Y
+                // Đường chính (dọc)
+                Line mainLine = new Line(
+                    new Point3d(0, -size, 0),
+                    new Point3d(0, size, 0)
+                );
+                mainLine.SetDatabaseDefaults();
+                mainLine.Color = Color.FromColorIndex(ColorMethod.ByAci, 4);
+                mainLine.LayerId = layerId;
+                btr.AppendEntity(mainLine);
+
+                // Nhánh trái
+                Line leftBranch = new Line(
+                    new Point3d(0, 0, 0),
+                    new Point3d(-size * 0.7, size * 0.7, 0)
+                );
+                leftBranch.SetDatabaseDefaults();
+                leftBranch.Color = Color.FromColorIndex(ColorMethod.ByAci, 4);
+                leftBranch.LayerId = layerId;
+                btr.AppendEntity(leftBranch);
+
+                // Nhánh phải
+                Line rightBranch = new Line(
+                    new Point3d(0, 0, 0),
+                    new Point3d(size * 0.7, size * 0.7, 0)
+                );
+                rightBranch.SetDatabaseDefaults();
+                rightBranch.Color = Color.FromColorIndex(ColorMethod.ByAci, 4);
+                rightBranch.LayerId = layerId;
+                btr.AppendEntity(rightBranch);
+
+                // Thêm block vào BlockTable
+                bt.UpgradeOpen();
+                ObjectId blockId = bt.Add(btr);
+                tr.AddNewlyCreatedDBObject(btr, true);
+                
+                ed.WriteMessage($"\nĐã tạo block GE_Y_CONN mặc định thành công! Handle: {blockId.Handle.Value}");
+
+                return blockId;
+            }
+            catch (System.Exception ex)
+            {
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor editor = doc.Editor;
+                editor.WriteMessage($"\nLỗi tạo block GE_Y_CONN mặc định: {ex.Message}");
+                return ObjectId.Null;
+            }
+        }
+
+        /// <summary>
+        /// Break polyline tại 2 điểm kết nối của block
+        /// </summary>
+        private static void BreakPolylineAtBlockPoints(ObjectId plId, Point3d connectionPoint1, Point3d connectionPoint2, double width, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nBắt đầu break polyline tại 2 điểm kết nối của block...");
+                
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                
+                ed.WriteMessage($"\nĐiểm kết nối 1: ({connectionPoint1.X:F2}, {connectionPoint1.Y:F2})");
+                ed.WriteMessage($"\nĐiểm kết nối 2: ({connectionPoint2.X:F2}, {connectionPoint2.Y:F2})");
+                
+                // Lưu XData của polyline gốc trước khi break
+                ResultBuffer originalXData = null;
+                Point3d breakPoint1 = connectionPoint1;
+                Point3d breakPoint2 = connectionPoint2;
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var pl = tr.GetObject(plId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (pl != null)
+                    {
+                        originalXData = pl.XData;
+                        
+                        ed.WriteMessage($"\nĐiểm break 1: ({breakPoint1.X:F2}, {breakPoint1.Y:F2})");
+                        ed.WriteMessage($"\nĐiểm break 2: ({breakPoint2.X:F2}, {breakPoint2.Y:F2})");
+                        
+                        // Xóa MText của polyline gốc
+                        DeleteMTextForPolyline(pl);
+                        
+                        // Xóa tick khỏi danh sách hiển thị
+                        FilletOverrule.RemoveAllowedPolyline(plId);
+                    }
+                    tr.Commit();
+                }
+
+                // Thực hiện break polyline tại 2 điểm
+                ed.WriteMessage("\nĐang thực hiện break polyline tại 2 điểm...");
+                
+                try
+                {
+                    // Break polyline tại điểm đầu block (không kéo dài)
+                    ed.WriteMessage("\nBreak tại điểm đầu block...");
+                    ed.Command("BREAK", plId, breakPoint1, breakPoint1);
+                    System.Threading.Thread.Sleep(500);
+                    
+                    // Tìm polyline mới sau break đầu tiên
+                    ObjectId newPlId = FindNewPolylineAfterBreak(plId, db);
+                    if (!newPlId.IsNull)
+                    {
+                        // Break polyline thứ 2 tại điểm cuối block
+                        ed.WriteMessage("\nBreak tại điểm cuối block...");
+                        ed.Command("BREAK", newPlId, breakPoint2, breakPoint2);
+                        System.Threading.Thread.Sleep(500);
+                    }
+                    
+                    // Kéo dài polyline đến block sau khi break
+                    ed.WriteMessage("\nKéo dài polyline đến block...");
+                    ExtendPolylinesToBlock(breakPoint1, breakPoint2, ed);
+                    
+                    // Điều chỉnh polyline để kết nối chính xác với block
+                    AdjustPolylinesToBlock(breakPoint1, breakPoint2, ed);
+                    
+                    ed.WriteMessage("\nLệnh BREAK đã được thực hiện tại 2 điểm");
+
+                    // Đợi một chút để AutoCAD hoàn thành lệnh break
+                    System.Threading.Thread.Sleep(1000);
+
+                    // Tìm và xử lý 2 polyline mới với width giống block
+                    ed.WriteMessage("\nĐang tìm polyline mới sau break...");
+                    ProcessNewPolylinesAfterBreakWithBlockWidth(plId, width, originalXData, ed);
+                    
+                    ed.WriteMessage("\nĐã break polyline thành công tại 2 điểm!");
+                }
+                catch (System.Exception breakEx)
+                {
+                    ed.WriteMessage($"\nLỗi khi thực hiện lệnh BREAK: {breakEx.Message}");
+                    ed.WriteMessage("\nSẽ thử cách khác...");
+                    
+                    // Fallback: Không break polyline, chỉ thêm block
+                    ed.WriteMessage("\nChỉ thêm block mà không break polyline");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\nLỗi break polyline: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Kéo dài polyline đến block sau khi break
+        /// </summary>
+        private static void ExtendPolylinesToBlock(Point3d point1, Point3d point2, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nĐang kéo dài polyline đến block...");
+                
+                // Tìm tất cả polyline mới (không có XData)
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                var newPolylineIds = new List<ObjectId>();
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null && LoadWidthFromXData(pl) <= 0) // Không có XData
+                            {
+                                newPolylineIds.Add(objId);
+                            }
+                        }
+                    }
+                    tr.Commit();
+                }
+                
+                ed.WriteMessage($"\nTìm thấy {newPolylineIds.Count} polyline mới để kéo dài");
+                
+                // Kéo dài từng polyline đến điểm gần nhất
+                foreach (var plId in newPolylineIds)
+                {
+                    try
+                    {
+                        // Tìm điểm gần nhất trên polyline với mỗi điểm block
+                        Point3d closestToPoint1 = GetClosestPointOnPolylineById(plId, point1, db);
+                        Point3d closestToPoint2 = GetClosestPointOnPolylineById(plId, point2, db);
+                        
+                        // Kéo dài đến điểm gần nhất
+                        ed.Command("EXTEND", plId, "", closestToPoint1, closestToPoint2);
+                        ed.WriteMessage($"\nĐã kéo dài polyline Handle: {plId.Handle.Value}");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\nLỗi kéo dài polyline Handle {plId.Handle.Value}: {ex.Message}");
+                    }
+                }
+                
+                ed.WriteMessage("\nĐã kéo dài tất cả polyline đến block");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\nLỗi kéo dài polyline: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Tìm điểm gần nhất trên polyline theo ObjectId
+        /// </summary>
+        private static Point3d GetClosestPointOnPolylineById(ObjectId plId, Point3d point, Database db)
+        {
+            try
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var pl = tr.GetObject(plId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (pl != null)
+                    {
+                        return GetClosestPointOnPolyline(pl, point);
+                    }
+                    tr.Commit();
+                }
+            }
+            catch
+            {
+                // Fallback to original point
+            }
+            return point;
+        }
+
+        /// <summary>
+        /// Điều chỉnh polyline để kết nối chính xác với block
+        /// </summary>
+        private static void AdjustPolylinesToBlock(Point3d point1, Point3d point2, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nĐang điều chỉnh polyline để kết nối chính xác với block...");
+                
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                var newPolylineIds = new List<ObjectId>();
+                
+                // Tìm tất cả polyline mới (không có XData)
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null && LoadWidthFromXData(pl) <= 0) // Không có XData
+                            {
+                                newPolylineIds.Add(objId);
+                            }
+                        }
+                    }
+                    tr.Commit();
+                }
+                
+                ed.WriteMessage($"\nTìm thấy {newPolylineIds.Count} polyline mới để điều chỉnh");
+                
+                // Điều chỉnh từng polyline
+                foreach (var plId in newPolylineIds)
+                {
+                    try
+                    {
+                        using (Transaction tr = db.TransactionManager.StartTransaction())
+                        {
+                            var pl = tr.GetObject(plId, OpenMode.ForWrite) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null)
+                            {
+                                // Tìm điểm gần nhất với mỗi điểm block
+                                Point3d closestToPoint1 = GetClosestPointOnPolyline(pl, point1);
+                                Point3d closestToPoint2 = GetClosestPointOnPolyline(pl, point2);
+                                
+                                // Tính khoảng cách từ polyline đến block
+                                double distToPoint1 = closestToPoint1.DistanceTo(point1);
+                                double distToPoint2 = closestToPoint2.DistanceTo(point2);
+                                
+                                // Nếu polyline gần với điểm 1, kéo dài đến điểm 1
+                                if (distToPoint1 < distToPoint2)
+                                {
+                                    // Kéo dài polyline đến điểm 1
+                                    ExtendPolylineToPoint(pl, point1);
+                                    ed.WriteMessage($"\nĐã kéo dài polyline Handle: {plId.Handle.Value} đến điểm 1");
+                                }
+                                else
+                                {
+                                    // Kéo dài polyline đến điểm 2
+                                    ExtendPolylineToPoint(pl, point2);
+                                    ed.WriteMessage($"\nĐã kéo dài polyline Handle: {plId.Handle.Value} đến điểm 2");
+                                }
+                            }
+                            tr.Commit();
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage($"\nLỗi điều chỉnh polyline Handle {plId.Handle.Value}: {ex.Message}");
+                    }
+                }
+                
+                ed.WriteMessage("\nĐã điều chỉnh tất cả polyline để kết nối với block");
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\nLỗi điều chỉnh polyline: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Kéo dài polyline đến điểm cụ thể
+        /// </summary>
+        private static void ExtendPolylineToPoint(Autodesk.AutoCAD.DatabaseServices.Polyline pl, Point3d targetPoint)
+        {
+            try
+            {
+                // Tìm điểm cuối gần nhất với target point
+                Point3d startPoint = pl.GetPoint3dAt(0);
+                Point3d endPoint = pl.GetPoint3dAt(pl.NumberOfVertices - 1);
+                
+                Point3d closestEnd = startPoint.DistanceTo(targetPoint) < endPoint.DistanceTo(targetPoint) ? startPoint : endPoint;
+                
+                // Nếu điểm cuối gần nhất là điểm đầu, thêm điểm mới vào đầu
+                if (closestEnd == startPoint)
+                {
+                    pl.AddVertexAt(0, new Point2d(targetPoint.X, targetPoint.Y), 0, 0, 0);
+                }
+                else
+                {
+                    // Thêm điểm mới vào cuối
+                    pl.AddVertexAt(pl.NumberOfVertices, new Point2d(targetPoint.X, targetPoint.Y), 0, 0, 0);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // Log error but don't throw
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Editor ed = doc.Editor;
+                ed.WriteMessage($"\nLỗi kéo dài polyline: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Tìm polyline mới sau break
+        /// </summary>
+        private static ObjectId FindNewPolylineAfterBreak(ObjectId originalPlId, Database db)
+        {
+            try
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    // Tìm polyline mới (không có XData)
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            if (objId != originalPlId) // Không phải polyline gốc
+                            {
+                                var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                                if (pl != null && LoadWidthFromXData(pl) <= 0) // Không có XData
+                                {
+                                    tr.Commit();
+                                    return objId;
+                                }
+                            }
+                        }
+                    }
+                    tr.Commit();
+                }
+            }
+            catch
+            {
+                // Ignore errors
+            }
+            return ObjectId.Null;
+        }
+
+        /// <summary>
+        /// Break polyline tại điểm chỉ định
+        /// </summary>
+        private static void BreakPolylineAtPoint(ObjectId plId, Point3d breakPoint, double width, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nBắt đầu break polyline...");
+                
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                
+                // Lưu XData của polyline gốc trước khi break
+                ResultBuffer originalXData = null;
+                Point3d breakPointExact = breakPoint;
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var pl = tr.GetObject(plId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                    if (pl != null)
+                    {
+                        originalXData = pl.XData;
+                        
+                        // Tìm điểm chính xác trên polyline
+                        breakPointExact = GetClosestPointOnPolyline(pl, breakPoint);
+                        ed.WriteMessage($"\nĐiểm break chính xác trên polyline: ({breakPointExact.X:F2}, {breakPointExact.Y:F2})");
+                        
+                        // Xóa MText của polyline gốc
+                        DeleteMTextForPolyline(pl);
+                        
+                        // Xóa tick khỏi danh sách hiển thị
+                        FilletOverrule.RemoveAllowedPolyline(plId);
+                    }
+                    tr.Commit();
+                }
+
+                // Thực hiện break polyline
+                ed.WriteMessage("\nĐang thực hiện break polyline...");
+                
+                try
+                {
+                    // Sử dụng lệnh BREAK của AutoCAD với điểm chính xác
+                    ed.Command("BREAK", plId, breakPointExact, breakPointExact);
+                    ed.WriteMessage("\nLệnh BREAK đã được thực hiện");
+
+                    // Đợi một chút để AutoCAD hoàn thành lệnh break
+                    System.Threading.Thread.Sleep(1000);
+
+                    // Tìm và xử lý 2 polyline mới
+                    ed.WriteMessage("\nĐang tìm polyline mới sau break...");
+                    ProcessNewPolylinesAfterBreak(plId, width, originalXData);
+                    
+                    ed.WriteMessage("\nĐã break polyline thành công!");
+                }
+                catch (System.Exception breakEx)
+                {
+                    ed.WriteMessage($"\nLỗi khi thực hiện lệnh BREAK: {breakEx.Message}");
+                    ed.WriteMessage("\nSẽ thử cách khác...");
+                    
+                    // Fallback: Không break polyline, chỉ thêm block
+                    ed.WriteMessage("\nChỉ thêm block mà không break polyline");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\nLỗi break polyline: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Tìm polyline gần nhất có XData HVAC_DUCT
+        /// </summary>
+        private static ObjectId FindNearestPolylineWithXData(Point3d point, Database db, Editor ed)
+        {
+            try
+            {
+                ed.WriteMessage("\nĐang tìm polyline gần nhất có XData HVAC_DUCT...");
+                
+                ObjectId nearestPlId = ObjectId.Null;
+                double minDistance = double.MaxValue;
+                
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    BlockTable bt = tr.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                    BlockTableRecord btr = tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead) as BlockTableRecord;
+
+                    foreach (ObjectId objId in btr)
+                    {
+                        if (objId.ObjectClass == RXClass.GetClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline)))
+                        {
+                            var pl = tr.GetObject(objId, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
+                            if (pl != null)
+                            {
+                                // Kiểm tra có XData HVAC_DUCT không
+                                double width = LoadWidthFromXData(pl);
+                                if (width > 0)
+                                {
+                                    // Tính khoảng cách từ điểm đến polyline
+                                    Point3d closestPoint = GetClosestPointOnPolyline(pl, point);
+                                    double distance = point.DistanceTo(closestPoint);
+                                    
+                                    if (distance < minDistance)
+                                    {
+                                        minDistance = distance;
+                                        nearestPlId = objId;
+                                        ed.WriteMessage($"\nTìm thấy polyline gần hơn: Handle {objId.Handle.Value}, khoảng cách: {distance:F2}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    tr.Commit();
+                }
+                
+                if (!nearestPlId.IsNull)
+                {
+                    ed.WriteMessage($"\nĐã tìm thấy polyline gần nhất: Handle {nearestPlId.Handle.Value}, khoảng cách: {minDistance:F2}");
+                }
+                else
+                {
+                    ed.WriteMessage("\nKhông tìm thấy polyline nào có XData HVAC_DUCT!");
+                }
+                
+                return nearestPlId;
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage($"\nLỗi tìm polyline: {ex.Message}");
+                return ObjectId.Null;
+            }
+        }
+
+        /// <summary>
+        /// Tìm điểm gần nhất trên polyline
+        /// </summary>
+        private static Point3d GetClosestPointOnPolyline(Autodesk.AutoCAD.DatabaseServices.Polyline pl, Point3d point)
+        {
+            try
+            {
+                double minDist = double.MaxValue;
+                Point3d closestPoint = point;
+
+                for (int i = 0; i < pl.NumberOfVertices - 1; i++)
+                {
+                    Point3d start = pl.GetPoint3dAt(i);
+                    Point3d end = pl.GetPoint3dAt(i + 1);
+                    
+                    // Tính điểm gần nhất trên segment
+                    Point3d closestOnSegment = GetClosestPointOnLineSegment(point, start, end);
+                    double dist = point.DistanceTo(closestOnSegment);
+                    
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        closestPoint = closestOnSegment;
+                    }
+                }
+
+                return closestPoint;
+            }
+            catch
+            {
+                return point; // Fallback to original point
+            }
+        }
+
+        /// <summary>
+        /// Tính điểm gần nhất trên đoạn thẳng
+        /// </summary>
+        private static Point3d GetClosestPointOnLineSegment(Point3d point, Point3d lineStart, Point3d lineEnd)
+        {
+            Vector3d line = lineEnd - lineStart;
+            Vector3d pointToStart = point - lineStart;
+            
+            double lineLength = line.Length;
+            if (lineLength == 0) return lineStart;
+            
+            double t = Math.Max(0, Math.Min(1, pointToStart.DotProduct(line) / (lineLength * lineLength)));
+            return lineStart + t * line;
+        }
+
+        /// <summary>
+        /// Tính góc quay của polyline tại một điểm
+        /// </summary>
+        private static double GetPolylineRotationAtPoint(Autodesk.AutoCAD.DatabaseServices.Polyline pl, Point3d point)
+        {
+            try
+            {
+                // Tìm segment gần nhất với điểm
+                double minDist = double.MaxValue;
+                int nearestSegment = 0;
+
+                for (int i = 0; i < pl.NumberOfVertices - 1; i++)
+                {
+                    Point3d start = pl.GetPoint3dAt(i);
+                    Point3d end = pl.GetPoint3dAt(i + 1);
+                    
+                    // Tính khoảng cách từ điểm đến segment
+                    double dist = GetDistanceToLineSegment(point, start, end);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        nearestSegment = i;
+                    }
+                }
+
+                // Tính vector hướng của segment
+                Point3d startPt = pl.GetPoint3dAt(nearestSegment);
+                Point3d endPt = pl.GetPoint3dAt(nearestSegment + 1);
+                Vector3d direction = endPt - startPt;
+                
+                // Tính góc quay
+                return Math.Atan2(direction.Y, direction.X);
+            }
+            catch
+            {
+                return 0.0; // Góc mặc định
+            }
+        }
+
+        /// <summary>
+        /// Tính khoảng cách từ điểm đến đoạn thẳng
+        /// </summary>
+        private static double GetDistanceToLineSegment(Point3d point, Point3d lineStart, Point3d lineEnd)
+        {
+            Vector3d line = lineEnd - lineStart;
+            Vector3d pointToStart = point - lineStart;
+            
+            double lineLength = line.Length;
+            if (lineLength == 0) return pointToStart.Length;
+            
+            double t = Math.Max(0, Math.Min(1, pointToStart.DotProduct(line) / (lineLength * lineLength)));
+            Point3d projection = lineStart + t * line;
+            
+            return point.DistanceTo(projection);
+        }
 
         /// <summary>
         /// Lệnh load tick từ database

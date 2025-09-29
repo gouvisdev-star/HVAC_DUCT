@@ -82,6 +82,35 @@ Plugin AutoCAD để tạo và quản lý hệ thống ống dẫn khí HVAC v�
 - Khi tick không hiển thị
 - Sau khi thay đổi cài đặt
 
+---
+
+### 5. `TAN25_HVAC_DUCT_ADD_Y_CONN` - Thêm Y-Connector
+**Mục đích**: Thêm block GE_Y_CONN vào polyline tại vị trí chỉ định
+
+**Cách sử dụng**:
+1. Chạy lệnh `TAN25_HVAC_DUCT_ADD_Y_CONN`
+2. Click chọn điểm trên polyline để đặt Y-Connector (hệ thống sẽ tự động tìm polyline gần nhất có XData HVAC_DUCT)
+3. Block sẽ tự động được tạo và chèn với góc quay phù hợp
+
+**Kết quả**:
+- Block GE_Y_CONN được load từ file block có sẵn (nếu có)
+- Nếu không tìm thấy file block, sẽ tạo block mặc định
+- Block được chèn tại điểm chính xác trên polyline (tự động tìm điểm gần nhất)
+- Góc quay tự động theo hướng của polyline tại điểm đó
+- Block được đặt trên layer "M-DUCT-FITTING" với màu xanh sáng
+- **Polyline tự động bị break tại 2 điểm kết nối của block**
+- **2 polyline mới được tạo với width giống block**
+- **Block nằm ở giữa, 2 polyline xuất phát từ điểm đầu và cuối của block**
+- **Polyline được kéo dài để kết nối trực tiếp với block**
+
+**Đường dẫn file block**:
+- `D:\Blocks\Mechanical\GE_Y_CONN.dwg` (đường dẫn chính)
+- `C:\HVAC_Blocks\GE_Y_CONN.dwg`
+- `D:\HVAC_Blocks\GE_Y_CONN.dwg`
+- `C:\Program Files\HVAC_DUCT\Blocks\GE_Y_CONN.dwg`
+- `.\Blocks\GE_Y_CONN.dwg` (thư mục hiện tại)
+- `.\GE_Y_CONN.dwg` (thư mục hiện tại)
+
 ## 🔧 Quy trình sử dụng
 
 ### Tạo hệ thống duct mới:
