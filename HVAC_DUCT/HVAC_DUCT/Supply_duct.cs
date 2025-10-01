@@ -91,7 +91,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
         private const double TICK_SPACING = 4.0;
         private const double RED_LENGTH = 2.0;
         private const int FILLET_SEGMENTS = 16;
-        private const double FILLET_RADIUS_PERCENT = 0.1;
+        private const double FILLET_RADIUS_PERCENT = 0.3;
         #endregion
 
         #region Private Fields
@@ -370,7 +370,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
                     Vector3d crossProduct = v1.CrossProduct(v2);
                     
                     // Tâm của cung tròn
-                Vector3d bisector = (v1 + v2).GetNormal();
+                    Vector3d bisector = (v1 + v2).GetNormal();
                     double centerDistance = radius / Math.Sin(angle / 2.0);
                     
                     // Đảo ngược hướng bo là chuẩn - không đảo ngược bisector
