@@ -90,7 +90,7 @@ namespace TAN2025_HVAC_DUCT_SUPPLY_AIR
         private const double DEFAULT_BLUE_WIDTH = 8.0;
         private const double TICK_SPACING = 4.0;
         private const double RED_LENGTH = 2.0;
-        private const int FILLET_SEGMENTS = 16;
+        private const int FILLET_SEGMENTS = 26;
         private const double FILLET_RADIUS_PERCENT = 0.3;
         #endregion
 
